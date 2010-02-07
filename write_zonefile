@@ -44,19 +44,21 @@ use warnings;
 use POSIX qw(strftime);
 use File::Temp qw(tempfile);
 use English;
+use YAML;
 
-our $INDIR = '/var/cache/bind/git/domains';
-our $OUTDIR = '/var/cache/bind/generated/';
-our @postcommand = qw(sudo /etc/init.d/bind9 reload);
-our %vars = (
-	minttl     => '1h',
-	refresh    => '3h',
-	retry      => '1h',
-	expire     => '7d',
-	negttl     => '1h',
-	origin     => 'draghi.debian.org',
-	hostmaster => 'hostmaster.debian.org',
-);
+my $conffile = '/etc/dns-helpers.yaml';
+$conffile = $ENV{'DNSHELPERS_CONF'} if defined $ENV{'DNSHELPERS_CONF'};
+
+my $config = YAML::LoadFile $conffile;
+
+for my $key (qw{indir outdir default_ttl soa}) {
+	die ("$key not set in config\n") unless defined $config->{$key};
+};
+
+our $INDIR = $config->{'indir'};
+our $OUTDIR = $config->{'outdir'};
+our $DEFAULT_TTL = $config->{'default_ttl'};
+our $SOA = $config->{'soa'};
 
 sub newserial {
 	my $file = shift;
@@ -72,11 +74,11 @@ sub newserial {
 		close SERIAL;
 		chomp $serial;
 	}
-	
+
 	if ((defined $serial) && ($serial >= $today)) {
-        	$newserial = $serial + 1;
+		$newserial = $serial + 1;
 	} else {
-        	$newserial = $today;
+		$newserial = $today;
 	}
 
 	open SERIAL, ">", "$OUTDIR/$file" or die "Cannot open $file for writing: $!";
@@ -93,13 +95,13 @@ open(INFILE, '<', "$INDIR/$file") or die "Can't open $INDIR/$file: $!\n";
 my ($fd, $filename) = tempfile(DIR => $OUTDIR);
 
 print $fd <<EOF;
-\$TTL   $vars{minttl}   ; time to live
-@	IN      SOA     $vars{origin}. $vars{hostmaster}. (
+\$TTL   $DEFAULT_TTL   ; time to live
+@	IN      SOA     $SOA->{origin}. $SOA->{hostmaster}. (
 	$serial ; serial number
-	$vars{refresh}  ; refresh
-	$vars{retry}    ; retry
-	$vars{expire}   ; expire
-	$vars{negttl} ) ; negative cache time-to-live
+	$SOA->{refresh}  ; refresh
+	$SOA->{retry}    ; retry
+	$SOA->{expire}   ; expire
+	$SOA->{negttl} ) ; negative cache time-to-live
 
 EOF
 

@@ -1,0 +1,32 @@
+--- 
+indir: '/var/cache/bind/git/domains'
+outdir: '/var/cache/bind/generated'
+postcommand: [sudo, /etc/init.d/bind9, reload]
+updatecommand: /git/HOOKS/write_zonefile
+named_snippet: |
+  zone "@@ZONENAME@@" {
+          type master;
+          file "@@ZONEFILE@@";
+          allow-query { any; };
+          allow-transfer {
+                  key draghi.debian.org-klecker.debian.org. ;
+                  key draghi.debian.org-raff.debian.org. ;
+                  key draghi.debian.org-rietz.debian.org. ;
+                  key draghi.debian.org-senfl.debian.org. ;
+                  key draghi.debian.org-ravel.debian.org. ;
+                  key draghi.debian.org-orff.debian.org. ;
+          };
+          also-notify {
+                  128.31.0.51; // senfl
+                  192.25.206.59; // raff
+                  2001:648:2ffc:deb:213:72ff:fe69:e188; // orff
+          };
+  };
+default_ttl: 1h
+soa:
+  origin: draghi.debian.org
+  hostmaster: hostmaster.debian.org
+  refresh: 3h
+  retry: 1h
+  expire: 7d
+  negttl: 1h

@@ -26,11 +26,23 @@ use strict;
 use warnings;
 use English;
 use File::Temp qw(tempfile);
+use YAML;
 
-our $INDIR = '/var/cache/bind/git/domains';
-our $OUTDIR = '/var/cache/bind/generated/';
-our @postcommand = qw(sudo /etc/init.d/bind9 reload);
-our $update_command = '/git/HOOKS/write_zonefile';
+my $conffile = '/etc/dns-helpers.yaml';
+$conffile = $ENV{'DNSHELPERS_CONF'} if defined $ENV{'DNSHELPERS_CONF'};
+
+my $config = YAML::LoadFile $conffile;
+
+for my $key (qw{indir outdir postcommand updatecommand named_snippet}) {
+	die ("$key not set in config\n") unless defined $config->{$key};
+};
+
+our $INDIR = $config->{'indir'};
+our $OUTDIR = $config->{'outdir'};
+our @postcommand = @{$config->{'postcommand'}};
+our $update_command = $config->{'updatecommand'};
+our $named_snippet = $config->{'named_snippet'};
+
 
 sub check_files {
 	my @cmd = qw(git diff --name-only);
@@ -68,27 +80,10 @@ sub do_update {
 	for my $file (@zones) {
 		my $zonename = $file; 
 		$zonename =~ s/\@/\//;
-		print $zonefd <<EOF;
-zone "$zonename" {
-	type master;
-	file "generated/$file";
-	allow-query { any; };
-	allow-transfer {
-		key draghi.debian.org-klecker.debian.org. ;
-		key draghi.debian.org-raff.debian.org. ;
-		key draghi.debian.org-rietz.debian.org. ;
-		key draghi.debian.org-senfl.debian.org. ;
-		key draghi.debian.org-ravel.debian.org. ;
-		key draghi.debian.org-orff.debian.org. ;
-	};
-	also-notify {
-		128.31.0.51; // senfl
-		192.25.206.59; // raff
-		2001:648:2ffc:deb:213:72ff:fe69:e188; // orff
-	};
-};
-
-EOF
+		my $snip = $named_snippet;
+		$snip =~ s#\@\@ZONEFILE\@\@#$OUTDIR/$file#g;
+		$snip =~ s#\@\@ZONENAME\@\@#$zonename#g;
+		print $zonefd $snip;
 		unless (-f "$OUTDIR/$file") {
 			print "Updating $file (missing) ...\n";
 			system($update_command, $file);
