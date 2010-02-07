@@ -78,7 +78,9 @@ sub do_update {
 	my ($zonefd, $zonefile) = tempfile(DIR => $OUTDIR);
 
 	for my $file (@zones) {
-		my $zonename = $file; 
+		next if $file =~ /^(dsset|keyset)-/;
+
+		my $zonename = $file;
 		$zonename =~ s/\@/\//;
 		my $snip = $named_snippet;
 		$snip =~ s#\@\@ZONEFILE\@\@#$OUTDIR/$file#g;
