@@ -30,3 +30,7 @@ soa:
   retry: 1h
   expire: 7d
   negttl: 1h
+dnssigner: /usr/local/bin/dnssigner
+dnssec_signature_validity_period: 4w
+dnssec_key_ttl: 12h
+

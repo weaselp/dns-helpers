@@ -88,6 +88,19 @@ sub newserial {
 	close SERIAL or die "Closing $file failed: $!";
 	return $newserial;
 }
+sub convert_time {
+	my $ticks = shift;
+	my $unit = shift;
+
+	if ($unit eq 's') { }
+	elsif ($unit eq 'm') { $ticks *= 60; }
+	elsif ($unit eq 'h') { $ticks *= 60*60; }
+	elsif ($unit eq 'd') { $ticks *= 60*60*24; }
+	elsif ($unit eq 'w') { $ticks *= 60*60*24*7; }
+	else { print STDERR "Warning: invalid unit '$unit'\n" }
+	return $ticks;
+}
+
 
 my $file = shift @ARGV;
 die "Usage: $0 <zonename>\n" unless defined $file && length($file);
@@ -95,6 +108,31 @@ die "Usage: $0 <zonename>\n" unless defined $file && length($file);
 my $serial = newserial($file);
 open(INFILE, '<', "$INDIR/$file") or die "Can't open $INDIR/$file: $!\n";
 my ($fd, $filename) = tempfile(DIR => $OUTDIR);
+
+
+my $do_dnssec = 0;
+my $dnssec_signature_validity_period = undef;
+my $dnssec_key_ttl = undef;
+$dnssec_signature_validity_period = convert_time($config->{'dnssec_signature_validity_period'}) if defined $config->{'dnssec_signature_validity_period'};
+$dnssec_key_ttl = $config->{'dnssec_key_ttl'} if defined $config->{'dnssec_key_ttl'};
+
+my $lineno = 0;
+my @lines = ();
+while (<INFILE>) {
+	$lineno++;
+	push @lines, $_;
+	chomp;
+
+	if (/^; wzf:\s*dnssec\s*=\s*1\s*$/) { $do_dnssec = 1 }
+	elsif (/^; wzf:\s*dnssec_signature_validity_period\s*=\s*(\d+)([smhdw]?)\s*$/) { $dnssec_signature_validity_period = convert_time($1, $2) }
+	elsif (/^; wzf:\s*dnssec_keyttl\s*=\s*(\d*)([smhdw]?)\s*$/) { $dnssec_key_ttl = convert_time($1, $2) }
+	elsif (/^; wzf:\s*soa_(origin|hostmaster|refresh|retry|expire|negttl)\s*=\s*(\S*)\s*$/) { $SOA->{$1} = $2 }
+	elsif (/^; wzf:\s*default_ttl\s*=\s*(\S*)\s*$/) { $DEFAULT_TTL = $1 }
+	elsif (/^; wzf:/) {
+		print STDERR "Unknown wzf directive in line $lineno: '$_'\n";
+	};
+};
+close INFILE;
 
 print $fd <<EOF;
 \$TTL   $DEFAULT_TTL   ; time to live
@@ -104,13 +142,32 @@ print $fd <<EOF;
 	$SOA->{retry}    ; retry
 	$SOA->{expire}   ; expire
 	$SOA->{negttl} ) ; negative cache time-to-live
-
 EOF
+for (@lines) {
+	print $fd $_;
+};
 
-print $fd $_ while (<INFILE>);
 close $fd;
-close INFILE;
 chmod(0664, $filename);
+
+if ($do_dnssec && !defined $config->{'dnssigner'}) {
+	print STDERR "Warning: dnssec enabled for zone $file, but dnssigner not defined.  Disabling dnssec\n";
+	$do_dnssec = 0;
+};
+if ($do_dnssec) {
+	# dnssigner -e +$(( 3600 * 24 * 2 )) -o palfrader.org palfrader.org
+	my @cmd = ($config->{'dnssigner'});
+	push(@cmd, '-e', '+'.$dnssec_signature_validity_period) if defined $dnssec_signature_validity_period;
+	push(@cmd, "-T", $dnssec_key_ttl) if ($dnssec_key_ttl);
+	push(@cmd, '-o', $file);
+	push(@cmd, $filename);
+	system(@cmd);
+	if ($CHILD_ERROR >> 8 != 0) {
+		unlink $filename;
+		die("ERROR: dnssigner returned errors on zone $file - aborted update.\n");
+	}
+	rename($filename.'.signed', $filename) or die "Cannot rename $filename.signed to $filename: $!\n";
+}
 
 system(qw{/usr/sbin/named-checkzone -k fail -n fail -S fail -i full -m fail -M fail}, $file, $filename);
 if ($CHILD_ERROR >> 8 != 0) {
