@@ -88,7 +88,7 @@ sub newserial {
 }
 
 my $file = shift @ARGV;
-die "Need filename\n" unless length($file);
+die "Usage: $0 <zonename>\n" unless defined $file && length($file);
 
 my $serial = newserial($file);
 open(INFILE, '<', "$INDIR/$file") or die "Can't open $INDIR/$file: $!\n";
