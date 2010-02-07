@@ -60,6 +60,8 @@ our $OUTDIR = $config->{'outdir'};
 our $DEFAULT_TTL = $config->{'default_ttl'};
 our $SOA = $config->{'soa'};
 
+chdir($INDIR) || die ("Cannot chdir to $INDIR: $!\n");
+
 sub newserial {
 	my $file = shift;
 	$file .= '.serial';
