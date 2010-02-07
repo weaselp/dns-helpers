@@ -1,0 +1,116 @@
+#!/usr/bin/perl
+# vim:set ai noet sts=8 ts=8 sw=8 tw=0:
+# Local Variables:
+# mode:cperl
+# cperl-indent-level:4
+# End:
+
+# Copyright © Stephen Gran 2009
+#
+# Author: Stephen Gran <steve@lobefin.net>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, under version 2 of the License.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+
+# write_zonefile <zonename>
+#
+# Reads a (partial) zonefile from INDIR/<zonename> and writes a complete zonefile
+# to OUTDIR/<zonedir>.
+#
+# The only processing this script does is adding a $TTL default line at the top,
+# and then adding a SOA before including the input zone in verbatim.
+#
+# The script keeps some state in OUTDIR/<zonename>.serial about which serial number
+# to put in the SOA.  It makes strictly incrementing serials, of the yyyymmddNN style
+# (overflowing to the next day if it runs out of numbers for a day.)
+#
+# If named-checkzone likes the new zonefile this scripts exits with 0 exit code
+# and the new zonefile in the output directory.  Otherwise it exits with a non-zero
+# code and without modifying the zonefile in the output dir.
+
+use strict;
+use warnings;
+use POSIX qw(strftime);
+use File::Temp qw(tempfile);
+use English;
+
+our $INDIR = '/var/cache/bind/git/domains';
+our $OUTDIR = '/var/cache/bind/generated/';
+our @postcommand = qw(sudo /etc/init.d/bind9 reload);
+our %vars = (
+	minttl     => '1h',
+	refresh    => '3h',
+	retry      => '1h',
+	expire     => '7d',
+	negttl     => '1h',
+	origin     => 'draghi.debian.org',
+	hostmaster => 'hostmaster.debian.org',
+);
+
+sub newserial {
+	my $file = shift;
+	$file .= '.serial';
+	my $serial;
+	my $newserial;
+	my $today = strftime "%Y%m%d01", gmtime();
+	
+	if (-f "$OUTDIR/$file") {
+		open (SERIAL, "<", "$OUTDIR/$file") or die "Cannot open $file for reading: $!";
+		$serial = <SERIAL>;
+		defined $serial or die "Cannot read serial $file: $!";
+		close SERIAL;
+		chomp $serial;
+	}
+	
+	if ((defined $serial) && ($serial >= $today)) {
+        	$newserial = $serial + 1;
+	} else {
+        	$newserial = $today;
+	}
+
+	open SERIAL, ">", "$OUTDIR/$file" or die "Cannot open $file for writing: $!";
+	print SERIAL "$newserial\n";
+	close SERIAL or die "Closing $file failed: $!";
+	return $newserial;
+}
+
+my $file = shift @ARGV;
+die "Need filename\n" unless length($file);
+
+my $serial = newserial($file);
+open(INFILE, '<', "$INDIR/$file") or die "Can't open $INDIR/$file: $!\n";
+my ($fd, $filename) = tempfile(DIR => $OUTDIR);
+
+print $fd <<EOF;
+\$TTL   $vars{minttl}   ; time to live
+@	IN      SOA     $vars{origin}. $vars{hostmaster}. (
+	$serial ; serial number
+	$vars{refresh}  ; refresh
+	$vars{retry}    ; retry
+	$vars{expire}   ; expire
+	$vars{negttl} ) ; negative cache time-to-live
+
+EOF
+
+print $fd $_ while (<INFILE>);
+close $fd;
+close INFILE;
+chmod(0664, $filename);
+
+system(qw{/usr/sbin/named-checkzone -k fail -n fail -S fail -i full -m fail -M fail}, $file, $filename);
+if ($CHILD_ERROR >> 8 != 0) {
+	unlink $filename;
+	die("ERROR: checkzone returned errors on zone $file - not updated.\n");
+}
+rename $filename, "$OUTDIR/$file";
