@@ -93,7 +93,17 @@ sub convert_time {
 	my $ticks = shift;
 	my $unit = shift;
 
-	if ($unit eq 's') { }
+	unless (defined $unit) {
+		my $newticks;
+		($newticks, $unit) = $ticks =~ m/^(\d*)([smhdw]?)$/;
+		if (!defined $newticks) {
+			print STDERR "Warning: invalid timestring to convert '$ticks'\n";
+			return $ticks;
+		}
+		$ticks = $newticks;
+	}
+
+	if ($unit eq 's' || $unit eq '') { }
 	elsif ($unit eq 'm') { $ticks *= 60; }
 	elsif ($unit eq 'h') { $ticks *= 60*60; }
 	elsif ($unit eq 'd') { $ticks *= 60*60*24; }
