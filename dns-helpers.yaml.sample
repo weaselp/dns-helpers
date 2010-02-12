@@ -32,5 +32,7 @@ soa:
   negttl: 1h
 dnssigner: /usr/local/bin/dnssigner
 dnssec_signature_validity_period: 4w
+# resign zones after one week
+dnssec_signature_publication_period: 1w
 dnssec_key_ttl: 12h
 

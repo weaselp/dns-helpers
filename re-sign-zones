@@ -1,0 +1,152 @@
+#!/usr/bin/perl
+
+# Copyright (c) 2010 Peter Palfrader <peter@palfrader.org>
+#
+# Permission is hereby granted, free of charge, to any person obtaining
+# a copy of this software and associated documentation files (the
+# "Software"), to deal in the Software without restriction, including
+# without limitation the rights to use, copy, modify, merge, publish,
+# distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so, subject to
+# the following conditions:
+#
+# The above copyright notice and this permission notice shall be
+# included in all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+# LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+# WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+use strict;
+use warnings;
+use English;
+use YAML;
+use Net::DNS::SEC::Maint::Key;
+use List::Util qw[max min];
+use File::stat;
+use Getopt::Long;
+
+my ($INDIR, $OUTDIR, $KEYDB);
+
+sub convert_time {
+	my $ticks = shift;
+	my $unit = shift;
+
+	unless (defined $unit) {
+		my $newticks;
+		($newticks, $unit) = $ticks =~ m/^(\d*)([smhdw]?)$/;
+		if (!defined $newticks) {
+			print STDERR "Warning: invalid timestring to convert '$ticks'\n";
+			return $ticks;
+		}
+		$ticks = $newticks;
+	}
+
+	if ($unit eq 's' || $unit eq '') { }
+	elsif ($unit eq 'm') { $ticks *= 60; }
+	elsif ($unit eq 'h') { $ticks *= 60*60; }
+	elsif ($unit eq 'd') { $ticks *= 60*60*24; }
+	elsif ($unit eq 'w') { $ticks *= 60*60*24*7; }
+	else { print STDERR "Warning: invalid unit '$unit'\n" }
+	return $ticks;
+}
+
+sub last_key_change {
+	my $zone = shift;
+	my @keys = $KEYDB->get_all($zone);
+	return undef if (scalar @keys == 0);
+	my $max = max(map {$_->get_state_change} @keys);
+	return $max;
+};
+
+sub last_zone_rebuild {
+	my $zone = shift;
+
+	my $zonefile = stat($OUTDIR.'/'.$zone);
+	my $serialfile = stat($OUTDIR.'/'.$zone.'.serial');
+	return 0 unless (defined $zonefile && defined $serialfile);
+	return min($zonefile->mtime, $serialfile->mtime);
+}
+
+
+my $USAGE = "Usage: $PROGRAM_NAME [--help] | [--force] [--verbose] [zone [zone...]]\n";
+my $params;
+Getopt::Long::config('bundling');
+GetOptions (
+	'--help' => \$params->{'help'},
+	'--force' => \$params->{'force'},
+	'--verbose' => \$params->{'verbose'},
+) or die ($USAGE);
+if ($params->{'help'}) {
+        print $USAGE;
+        exit(0);
+};
+
+
+my $conffile = '/etc/dns-helpers.yaml';
+$conffile = $ENV{'DNSHELPERS_CONF'} if defined $ENV{'DNSHELPERS_CONF'};
+my $config = YAML::LoadFile $conffile;
+
+for my $key (qw{indir outdir updatecommand postcommand dnssec_signature_publication_period}) {
+	die ("$key not set in config\n") unless defined $config->{$key};
+};
+
+$INDIR = $config->{'indir'};
+$OUTDIR = $config->{'outdir'};
+$KEYDB = Net::DNS::SEC::Maint::Key->new(1);
+my $update_command = $config->{'updatecommand'};
+our @postcommand = @{$config->{'postcommand'}};
+my $dnssec_signature_publication_period = convert_time($config->{'dnssec_signature_publication_period'});
+my $skew = 5*60;
+
+
+chdir $INDIR or die "chdir $INDIR failed? $!\n";
+
+my @zones;
+if (scalar @ARGV) {
+	@zones = @ARGV;
+} else {
+	opendir INDIR, '.' or die ("Cannot opendir $INDIR\n");
+	for my $file (readdir INDIR) {
+		next if ( -l "$file" );
+		next unless ( -f "$file" );
+		next if $file =~ /^(dsset|keyset)-/;
+
+		push @zones, $file;
+	}
+	closedir(INDIR);
+};
+
+my $updates = 0;
+my $now = time();
+for my $zone (@zones) {
+	my $last_key_change = last_key_change($zone);
+	unless (defined $last_key_change) {
+		print STDERR "No keys for zone $zone\n" if $params->{'verbose'};
+		next;
+	};
+
+	my $last_zone_rebuild = last_zone_rebuild($zone);
+
+	my $rebuild = 0;
+	$rebuild = 1 if ($last_zone_rebuild - $skew < $last_key_change);
+	$rebuild = 1 if ($last_zone_rebuild - $skew < $now - $dnssec_signature_publication_period);
+	$rebuild = 1 if $params->{'force'};
+	unless ($rebuild) {
+		print STDERR "Skipping $zone\n" if $params->{'verbose'};
+		next;
+	}
+
+	print STDERR "Updating $zone\n" if $params->{'verbose'};
+	$updates++;
+	system($update_command, $zone);
+	warn("$update_command $zone returned non-zero exit status ".($CHILD_ERROR >> 8).".\n") if ($CHILD_ERROR >> 8 != 0);
+};
+
+if ($updates > 0) {
+	system(@postcommand) == 0 or die "system @postcommand failed: $?\n";
+};
