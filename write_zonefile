@@ -26,19 +26,20 @@
 
 # write_zonefile <zonename>
 #
-# Reads a (partial) zonefile from INDIR/<zonename> and writes a complete zonefile
-# to OUTDIR/<zonedir>.
+# Reads a (partial) zonefile from INDIR/<zonename> and writes a complete
+# zonefile to OUTDIR/<zonedir>.
 #
-# The only processing this script does is adding a $TTL default line at the top,
-# and then adding a SOA before including the input zone in verbatim.
+# The only processing this script does is adding a $TTL default line at the
+# top, and then adding a SOA before including the input zone in verbatim.
 #
-# The script keeps some state in OUTDIR/<zonename>.serial about which serial number
-# to put in the SOA.  It makes strictly incrementing serials, of the yyyymmddNN style
-# (overflowing to the next day if it runs out of numbers for a day.)
+# The script keeps some state in OUTDIR/<zonename>.serial about which serial
+# number to put in the SOA.  It makes strictly incrementing serials, of the
+# yyyymmddNN style (overflowing to the next day if it runs out of numbers for a
+# day.)
 #
 # If named-checkzone likes the new zonefile this scripts exits with 0 exit code
-# and the new zonefile in the output directory.  Otherwise it exits with a non-zero
-# code and without modifying the zonefile in the output dir.
+# and the new zonefile in the output directory.  Otherwise it exits with a
+# non-zero code and without modifying the zonefile in the output dir.
 
 use strict;
 use warnings;
