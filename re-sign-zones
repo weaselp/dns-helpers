@@ -21,6 +21,96 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+
+=head1 NAME
+
+re-sign-zones - Re-sign dnssec secured zone files
+
+=head1 SYNOPSIS
+
+re-sign-zones [B<--force>] [B<--verbose>] [I<zone> [I<zone> ...]]
+
+re-sign-zones B<--help>
+
+
+=head1 DESCRIPTION
+
+B<re-sign-zones> loops over all the zone files in the configured input
+directory or all the zones given on the command line.  It then passes
+them to B<write_zonefile> for recreation (and thus re-signing) if
+
+=over
+
+=item
+
+the zonefile's last signing time is more than
+I<dnssec_signature_publication_period> in the past, or
+
+=item
+
+if the zones key information changed more recently than
+the last signing, or
+
+=item
+
+the B<--force> option is used.
+
+=back
+
+Last signing time is determined by the mtime of the zonefile and its companion
+F<.serial> state file in the output directory.
+
+Last zone key information is taken from B<Net::DNS::SEC::Maint::Key>'s
+key database.
+
+
+
+=head1 FILES
+
+=over
+
+=item F</etc/dns-helpers.yaml>
+
+Config file location.
+
+=back
+
+
+=head1 ENVIRONMENT
+
+=over
+
+=item B<DNSHELPERS_CONF>
+
+Overrides location for the configuration file.
+
+=item B<DNSSECMAINT_CONFFILE>
+
+Location for the  B<Net::DNS::SEC::Maint::Key> configuration file.
+
+=back
+
+
+=head1 SEE ALSO
+
+=over
+
+=item F<dns-helpers.yaml.sample>
+
+=item B<named-checkzone>
+
+=item B<dns-update>
+
+=item B<maintkeydb>
+
+=item B<dnssigner>
+
+=item B<write_zonefile>
+
+=back
+
+=cut
+
 use strict;
 use warnings;
 use English;
