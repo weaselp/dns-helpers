@@ -23,6 +23,77 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
+=head1 NAME
+
+dns-update - update zonefiles changed in recent git commit
+
+=head1 SYNOPSIS
+
+dns-update
+
+=head1 DESCRIPTION
+
+B<dns-update> is intended to be called from a git F<post-receive> hook.  It
+receives the arguments through stdin, like the hook itself, so if more items
+in the hook require that information it needs to be cloned first.
+
+It then calls B<git diff> on the revision pairs, learning which files where
+touched in this commit.
+
+Next it updates the git working copy in the input directory.
+
+We then call B<write_zonefile> to create a useable zone file for for all
+regular files learned in the git diff step above, excluding symlinks or
+directories or the like, that are in the root directory of the git repository
+
+Afterwards we loop over all the zonefiles in the input directory, producing a
+suitable B<named.conf> snippet to be included in the bind config.  Any zones
+that for some reason are not present in the output directory already are
+created at this step also.
+
+Lastly bind9 is reloaded.
+
+=head1 FILES
+
+=over
+
+=item F</etc/dns-helpers.yaml>
+
+Config file location.
+
+=back
+
+
+=head1 ENVIRONMENT
+
+=over
+
+=item B<GIT_DIR>
+
+Location of the "parent" git repository, used by git during the git-diff phase.
+
+=item B<DNSHELPERS_CONF>
+
+Overrides location for the configuration file.
+
+=back
+
+
+=head1 SEE ALSO
+
+=over
+
+=item F<dns-helpers.yaml.sample>
+
+=item B<write_zonefile>
+
+=item B<git>
+
+=back
+
+=cut
+
+
 use strict;
 use warnings;
 use English;
