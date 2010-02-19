@@ -213,7 +213,14 @@ if (scalar @ARGV) {
 
 my $updates = 0;
 my $now = time();
-for my $zone (@zones) {
+# Process files from longest zonename to shortest.
+# This is to ensure we deal with any child zones before we
+# handle their respective parent zone.
+# E.g. we do rbl.debian.net before debian.net, thus
+# producing the dnssec related file dsset-rbl.debian.net,
+# which is included in the debian.net zone, before we
+# go and create/sign the debian.net zone.
+for my $zone (sort {length($b) <=> length($a)} @zones) {
 	my $last_key_change = last_key_change($zone);
 	unless (defined $last_key_change) {
 		print STDERR "No keys for zone $zone\n" if $params->{'verbose'};

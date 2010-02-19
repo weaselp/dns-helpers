@@ -133,7 +133,14 @@ sub do_update {
 	my @cmd = qw(git pull);
 	system(@cmd) == 0 or die "system @cmd failed: $?\n";
 	
-	for my $file (@changes)  {
+	# Process files from longest zonename to shortest.
+	# This is to ensure we deal with any child zones before we
+	# handle their respective parent zone.
+	# E.g. we do rbl.debian.net before debian.net, thus
+	# producing the dnssec related file dsset-rbl.debian.net,
+	# which is included in the debian.net zone, before we
+	# go and create/sign the debian.net zone.
+	for my $file (sort {length($b) <=> length($a)} @changes)  {
 		next if ( -l "$INDIR/$file" ); # ignore symlinks
 		next if ( $file =~ m#/# ); # ignore files not in the repository's /
 		next unless ( -f "$INDIR/$file" );
@@ -149,7 +156,8 @@ sub do_update {
 
 	my ($zonefd, $zonefile) = tempfile(DIR => $OUTDIR);
 
-	for my $file (@zones) {
+	# same sort thing as above
+	for my $file (sort {length($b) <=> length($a)} @zones) {
 		next if $file =~ /^(dsset|keyset)-/;
 
 		my $zonename = $file;
