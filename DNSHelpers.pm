@@ -156,7 +156,7 @@ have (the name kinda gives it away; optional).
 
 =cut
 sub sign_zonefile {
-	my ($zonename, $zonefile, $dnssigner, $confdnssec_key_ttl, $dnssec_signature_validity_period) = @_
+	my ($zonename, $zonefile, $dnssigner, $confdnssec_key_ttl, $dnssec_signature_validity_period) = @_;
 
 	if (!defined $dnssigner}) {
 		print STDERR "Warning: dnssec enabled for zone $zonename, but dnssigner not defined.  Disabling dnssec.\n";
