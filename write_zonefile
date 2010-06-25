@@ -162,11 +162,11 @@ sub convert_time {
 }
 
 
-my $file = shift @ARGV;
-die "Usage: $0 <zonename>\n" unless defined $file && length($file);
+my $zonename = shift @ARGV;
+die "Usage: $0 <zonename>\n" unless defined $zonename && length($zonename);
 
-my $serial = new_serial($file, $OUTDIR);
-open(INFILE, '<', "$INDIR/$file") or die "Can't open $INDIR/$file: $!\n";
+my $serial = new_serial($zonename, $OUTDIR);
+open(INFILE, '<', "$INDIR/$zonename") or die "Can't open $INDIR/$zonename: $!\n";
 my ($fd, $filename) = tempfile(DIR => $OUTDIR);
 
 
@@ -203,7 +203,7 @@ close $fd;
 chmod(0664, $filename);
 
 if ($do_dnssec && !defined $config->{'dnssigner'}) {
-	print STDERR "Warning: dnssec enabled for zone $file, but dnssigner not defined.  Disabling dnssec\n";
+	print STDERR "Warning: dnssec enabled for zone $zonename, but dnssigner not defined.  Disabling dnssec\n";
 	$do_dnssec = 0;
 };
 if ($do_dnssec) {
@@ -211,19 +211,19 @@ if ($do_dnssec) {
 	my @cmd = ($config->{'dnssigner'});
 	push(@cmd, '-e', '+'.$dnssec_signature_validity_period) if defined $dnssec_signature_validity_period;
 	push(@cmd, "-T", $dnssec_key_ttl) if ($dnssec_key_ttl);
-	push(@cmd, '-o', $file);
+	push(@cmd, '-o', $zonename);
 	push(@cmd, $filename);
 	system(@cmd);
 	if ($CHILD_ERROR >> 8 != 0) {
 		unlink $filename;
-		die("ERROR: dnssigner returned errors on zone $file - aborted update.\n");
+		die("ERROR: dnssigner returned errors on zone $zonename - aborted update.\n");
 	}
 	rename($filename.'.signed', $filename) or die "Cannot rename $filename.signed to $filename: $!\n";
 }
 
-system(qw{/usr/sbin/named-checkzone -k fail -n fail -S fail -i full -m fail -M fail}, $file, $filename);
+system(qw{/usr/sbin/named-checkzone -k fail -n fail -S fail -i full -m fail -M fail}, $zonename, $filename);
 if ($CHILD_ERROR >> 8 != 0) {
 	unlink $filename;
-	die("ERROR: checkzone returned errors on zone $file - not updated.\n");
+	die("ERROR: checkzone returned errors on zone $zonename - not updated.\n");
 }
-rename $filename, "$OUTDIR/$file";
+rename $filename, "$OUTDIR/$zonename";
