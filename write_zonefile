@@ -165,7 +165,7 @@ sub convert_time {
 my $file = shift @ARGV;
 die "Usage: $0 <zonename>\n" unless defined $file && length($file);
 
-my $serial = newserial($file, $OUTDIR);
+my $serial = new_serial($file, $OUTDIR);
 open(INFILE, '<', "$INDIR/$file") or die "Can't open $INDIR/$file: $!\n";
 my ($fd, $filename) = tempfile(DIR => $OUTDIR);
 

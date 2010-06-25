@@ -31,7 +31,7 @@ use strict;
 use warnings;
 use POSIX qw(strftime);
 
-sub newserial {
+sub new_serial {
 	my ($file, $outdir) = @_;
 
 	$file .= '.serial';
