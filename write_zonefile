@@ -120,7 +120,7 @@ use YAML;
 
 use FindBin;
 use lib $FindBin::Bin;
-use DNSHelpers;
+use DSA::DNSHelpers;
 
 my $conffile = '/etc/dns-helpers.yaml';
 $conffile = $ENV{'DNSHELPERS_CONF'} if defined $ENV{'DNSHELPERS_CONF'};

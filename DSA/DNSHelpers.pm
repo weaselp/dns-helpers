@@ -24,7 +24,7 @@
 
 =head1 NAME
 
-DNSHelpers - some building blocks used for debian.org's DNS scripts
+DSA::DNSHelpers - some building blocks used for debian.org's DNS scripts
 
 
 =head1 FUNCTIONS
@@ -33,7 +33,7 @@ DNSHelpers - some building blocks used for debian.org's DNS scripts
 
 =cut
 
-package DNSHelpers;
+package DSA::DNSHelpers;
 @ISA = qw(Exporter);
 require Exporter;
 @EXPORT = qw(new_serial generate_zoneheader sign_zonefile check_zonefile);
