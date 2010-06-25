@@ -172,6 +172,7 @@ my $dnssec_key_ttl = undef;
 $dnssec_signature_validity_period = convert_time($config->{'dnssec_signature_validity_period'}) if defined $config->{'dnssec_signature_validity_period'};
 $dnssec_key_ttl = $config->{'dnssec_key_ttl'} if defined $config->{'dnssec_key_ttl'};
 
+open(INFILE, '<', "$INDIR/$zonename") or die "Can't open $INDIR/$zonename: $!\n";
 my $lineno = 0;
 my @lines = ();
 while (<INFILE>) {
@@ -193,7 +194,6 @@ close INFILE;
 
 
 my $serial = new_serial($zonename, $OUTDIR);
-open(INFILE, '<', "$INDIR/$zonename") or die "Can't open $INDIR/$zonename: $!\n";
 my ($fd, $tmpzonefilename) = tempfile(DIR => $OUTDIR);
 
 print $fd generate_zoneheader($serial, ttl => $DEFAULT_TTL, %$SOA);
