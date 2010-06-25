@@ -194,15 +194,7 @@ while (<INFILE>) {
 };
 close INFILE;
 
-print $fd <<EOF;
-\$TTL   $DEFAULT_TTL   ; time to live
-@	IN      SOA     $SOA->{origin}. $SOA->{hostmaster}. (
-	$serial ; serial number
-	$SOA->{refresh}  ; refresh
-	$SOA->{retry}    ; retry
-	$SOA->{expire}   ; expire
-	$SOA->{negttl} ) ; negative cache time-to-live
-EOF
+print $fd generate_zoneheader($serial, ttl => $DEFAULT_TTL, %$SOA);
 for (@lines) {
 	print $fd $_;
 };

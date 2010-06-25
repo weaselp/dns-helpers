@@ -58,3 +58,21 @@ sub newserial {
 	close SERIAL or die "Closing $file failed: $!";
 	return $newserial;
 }
+
+sub generate_zoneheader {
+	my ($serial, %vars) = @_;
+
+	my $header = '';
+	$header .= "\$TTL	$vars{'ttl'}" if defined $vars{'ttl'};
+	$header .= <<EOF;
+@	IN	SOA	$vars{'origin'}. $vars{'hostmaster'}. (
+	$serial	; serial number
+	$vars{'refresh'}	; refresh
+	$vars{'retry'}	; retry
+	$vars{'expire'}	; expire
+	$vars{'negttl'} )	; negative cache time-to-live
+EOF
+	return $header;
+}
+
+1;
