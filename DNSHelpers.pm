@@ -36,7 +36,7 @@ DNSHelpers - some building blocks used for debian.org's DNS scripts
 package DNSHelpers;
 @ISA = qw(Exporter);
 require Exporter;
-@EXPORT = qw(new_serial generate_zoneheader sign_zonefile);
+@EXPORT = qw(new_serial generate_zoneheader sign_zonefile check_zonefile);
 
 use strict;
 use warnings;
@@ -177,5 +177,23 @@ sub sign_zonefile {
 	rename($zonefilename.'.signed', $zonefilename) or die "Cannot rename $zonefilename.signed to $zonefilename: $!\n";
 	return 1;
 };
+
+
+=item B<check_zonefile> ($zonename, $zonefilename)
+
+Run bind's named-checkzone to check a zonefile
+
+returns undef on errors, 1 if OK.
+
+=cut
+sub check_zonefile {
+	my ($zonename, $zonefilename) = @_;
+
+	system(qw{/usr/sbin/named-checkzone -k fail -n fail -S fail -i full -m fail -M fail}, $zonename, $zonefilename);
+	if ($CHILD_ERROR >> 8 != 0) {
+		return undef;
+	};
+	return 1;
+}
 
 1;

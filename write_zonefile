@@ -165,10 +165,6 @@ sub convert_time {
 my $zonename = shift @ARGV;
 die "Usage: $0 <zonename>\n" unless defined $zonename && length($zonename);
 
-my $serial = new_serial($zonename, $OUTDIR);
-open(INFILE, '<', "$INDIR/$zonename") or die "Can't open $INDIR/$zonename: $!\n";
-my ($fd, $tmpzonefilename) = tempfile(DIR => $OUTDIR);
-
 
 my $do_dnssec = 0;
 my $dnssec_signature_validity_period = undef;
@@ -194,6 +190,12 @@ while (<INFILE>) {
 };
 close INFILE;
 
+
+
+my $serial = new_serial($zonename, $OUTDIR);
+open(INFILE, '<', "$INDIR/$zonename") or die "Can't open $INDIR/$zonename: $!\n";
+my ($fd, $tmpzonefilename) = tempfile(DIR => $OUTDIR);
+
 print $fd generate_zoneheader($serial, ttl => $DEFAULT_TTL, %$SOA);
 for (@lines) {
 	print $fd $_;
@@ -213,8 +215,7 @@ if ($do_dnssec) {
 	};
 };
 
-system(qw{/usr/sbin/named-checkzone -k fail -n fail -S fail -i full -m fail -M fail}, $zonename, $tmpzonefilename);
-if ($CHILD_ERROR >> 8 != 0) {
+if (! check_zonefile($zonename, $tmpzonefilename) {
 	unlink $tmpzonefilename;
 	die("ERROR: checkzone returned errors on zone $zonename - not updated.\n");
 }
