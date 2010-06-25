@@ -167,7 +167,7 @@ die "Usage: $0 <zonename>\n" unless defined $zonename && length($zonename);
 
 my $serial = new_serial($zonename, $OUTDIR);
 open(INFILE, '<', "$INDIR/$zonename") or die "Can't open $INDIR/$zonename: $!\n";
-my ($fd, $filename) = tempfile(DIR => $OUTDIR);
+my ($fd, $tmpzonefilename) = tempfile(DIR => $OUTDIR);
 
 
 my $do_dnssec = 0;
@@ -200,7 +200,7 @@ for (@lines) {
 };
 
 close $fd;
-chmod(0664, $filename);
+chmod(0664, $tmpzonefilename);
 
 if ($do_dnssec && !defined $config->{'dnssigner'}) {
 	print STDERR "Warning: dnssec enabled for zone $zonename, but dnssigner not defined.  Disabling dnssec\n";
@@ -212,18 +212,18 @@ if ($do_dnssec) {
 	push(@cmd, '-e', '+'.$dnssec_signature_validity_period) if defined $dnssec_signature_validity_period;
 	push(@cmd, "-T", $dnssec_key_ttl) if ($dnssec_key_ttl);
 	push(@cmd, '-o', $zonename);
-	push(@cmd, $filename);
+	push(@cmd, $tmpzonefilename);
 	system(@cmd);
 	if ($CHILD_ERROR >> 8 != 0) {
-		unlink $filename;
+		unlink $tmpzonefilename;
 		die("ERROR: dnssigner returned errors on zone $zonename - aborted update.\n");
 	}
-	rename($filename.'.signed', $filename) or die "Cannot rename $filename.signed to $filename: $!\n";
+	rename($tmpzonefilename.'.signed', $tmpzonefilename) or die "Cannot rename $tmpzonefilename.signed to $tmpzonefilename: $!\n";
 }
 
-system(qw{/usr/sbin/named-checkzone -k fail -n fail -S fail -i full -m fail -M fail}, $zonename, $filename);
+system(qw{/usr/sbin/named-checkzone -k fail -n fail -S fail -i full -m fail -M fail}, $zonename, $tmpzonefilename);
 if ($CHILD_ERROR >> 8 != 0) {
-	unlink $filename;
+	unlink $tmpzonefilename;
 	die("ERROR: checkzone returned errors on zone $zonename - not updated.\n");
 }
-rename $filename, "$OUTDIR/$zonename";
+rename $tmpzonefilename, "$OUTDIR/$zonename";
