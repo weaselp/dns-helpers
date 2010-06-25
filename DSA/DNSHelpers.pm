@@ -36,7 +36,7 @@ DSA::DNSHelpers - some building blocks used for debian.org's DNS scripts
 package DSA::DNSHelpers;
 @ISA = qw(Exporter);
 require Exporter;
-@EXPORT = qw(new_serial generate_zoneheader sign_zonefile check_zonefile);
+@EXPORT = qw(new_serial generate_zoneheader sign_zonefile check_zonefile convert_time);
 
 use strict;
 use warnings;
@@ -194,6 +194,37 @@ sub check_zonefile {
 		return undef;
 	};
 	return 1;
+}
+
+=item B<convert_time> ($ticks, $unit)
+
+Convert $ticks count of $unit (s, m, h, d, or w for seconds, minutes, hours,
+days or weeks respectively) to seconds.  If $unit is undefined then $ticks
+is parsed to see if it contains a unit character at the end.  If none if found
+a warning is printed and the number assumed to be seconds.
+
+=cut
+sub convert_time {
+	my $ticks = shift;
+	my $unit = shift;
+
+	unless (defined $unit) {
+		my $newticks;
+		($newticks, $unit) = $ticks =~ m/^(\d*)([smhdw]?)$/;
+		if (!defined $newticks) {
+			print STDERR "Warning: invalid timestring to convert '$ticks'\n";
+			return $ticks;
+		}
+		$ticks = $newticks;
+	}
+
+	if ($unit eq 's' || $unit eq '') { }
+	elsif ($unit eq 'm') { $ticks *= 60; }
+	elsif ($unit eq 'h') { $ticks *= 60*60; }
+	elsif ($unit eq 'd') { $ticks *= 60*60*24; }
+	elsif ($unit eq 'w') { $ticks *= 60*60*24*7; }
+	else { print STDERR "Warning: invalid unit '$unit'\n" }
+	return $ticks;
 }
 
 1;

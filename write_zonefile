@@ -138,29 +138,6 @@ our $SOA = $config->{'soa'};
 
 chdir($INDIR) || die ("Cannot chdir to $INDIR: $!\n");
 
-sub convert_time {
-	my $ticks = shift;
-	my $unit = shift;
-
-	unless (defined $unit) {
-		my $newticks;
-		($newticks, $unit) = $ticks =~ m/^(\d*)([smhdw]?)$/;
-		if (!defined $newticks) {
-			print STDERR "Warning: invalid timestring to convert '$ticks'\n";
-			return $ticks;
-		}
-		$ticks = $newticks;
-	}
-
-	if ($unit eq 's' || $unit eq '') { }
-	elsif ($unit eq 'm') { $ticks *= 60; }
-	elsif ($unit eq 'h') { $ticks *= 60*60; }
-	elsif ($unit eq 'd') { $ticks *= 60*60*24; }
-	elsif ($unit eq 'w') { $ticks *= 60*60*24*7; }
-	else { print STDERR "Warning: invalid unit '$unit'\n" }
-	return $ticks;
-}
-
 
 my $zonename = shift @ARGV;
 die "Usage: $0 <zonename>\n" unless defined $zonename && length($zonename);
