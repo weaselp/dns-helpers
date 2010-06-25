@@ -36,12 +36,13 @@ DSA::DNSHelpers - some building blocks used for debian.org's DNS scripts
 package DSA::DNSHelpers;
 @ISA = qw(Exporter);
 require Exporter;
-@EXPORT = qw(new_serial generate_zoneheader sign_zonefile check_zonefile convert_time);
+@EXPORT = qw(new_serial generate_zoneheader sign_zonefile check_zonefile convert_time load_config);
 
 use strict;
 use warnings;
 use POSIX qw(strftime);
 use English;
+use YAML;
 
 =item B<new_serial> ($file, $outdir)
 
@@ -226,5 +227,26 @@ sub convert_time {
 	else { print STDERR "Warning: invalid unit '$unit'\n" }
 	return $ticks;
 }
+
+=item B<load_config> (@keys)
+
+Loads the configuration file.  @keys specifies a list of keys that must be
+present or the function will die().
+
+=cut
+
+sub load_config {
+	my @keys = @_;
+
+	my $conffile = '/etc/dns-helpers.yaml';
+	$conffile = $ENV{'DNSHELPERS_CONF'} if defined $ENV{'DNSHELPERS_CONF'};
+
+	my $config = YAML::LoadFile $conffile;
+
+	for my $key (@keys) {
+		die ("$key not set in config\n") unless defined $config->{$key};
+	};
+	return $config;
+};
 
 1;
