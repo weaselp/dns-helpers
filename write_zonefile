@@ -205,7 +205,7 @@ chmod(0664, $tmpzonefilename);
 if ($do_dnssec) {
 	my $ret = sign_zonefile($zonename, $tmpzonefilename,
 		$config->{'dnssigner'},
-		$confdnssec_key_ttl, $dnssec_signature_validity_period);
+		$dnssec_key_ttl, $dnssec_signature_validity_period);
 
 	if (!defined $ret) {
 		unlink $tmpzonefilename;

@@ -41,6 +41,7 @@ require Exporter;
 use strict;
 use warnings;
 use POSIX qw(strftime);
+use English;
 
 =item B<new_serial> ($file, $outdir)
 
@@ -136,7 +137,7 @@ EOF
 	return $header;
 }
 
-=item B<sign_zonefile> ($zonename, $zonefilename, $dnssigner, $confdnssec_key_ttl, $dnssec_signature_validity_period)
+=item B<sign_zonefile> ($zonename, $zonefilename, $dnssigner, $dnssec_key_ttl, $dnssec_signature_validity_period)
 
 This signs the zone with origin at $zonename and stored in $zonefilename,
 replacing the file with a DNSSEC signed version.
@@ -156,9 +157,9 @@ have (the name kinda gives it away; optional).
 
 =cut
 sub sign_zonefile {
-	my ($zonename, $zonefile, $dnssigner, $confdnssec_key_ttl, $dnssec_signature_validity_period) = @_;
+	my ($zonename, $zonefilename, $dnssigner, $dnssec_key_ttl, $dnssec_signature_validity_period) = @_;
 
-	if (!defined $dnssigner}) {
+	if (!defined $dnssigner) {
 		print STDERR "Warning: dnssec enabled for zone $zonename, but dnssigner not defined.  Disabling dnssec.\n";
 		return 0;
 	};
@@ -175,7 +176,6 @@ sub sign_zonefile {
 	}
 	rename($zonefilename.'.signed', $zonefilename) or die "Cannot rename $zonefilename.signed to $zonefilename: $!\n";
 	return 1;
-}
+};
 
-}
 1;
