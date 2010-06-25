@@ -194,7 +194,7 @@ close INFILE;
 
 
 my $serial = new_serial($zonename, $OUTDIR);
-my ($fd, $tmpzonefilename) = tempfile(DIR => $OUTDIR);
+my ($fd, $tmpzonefilename) = tempfile(DIR => $OUTDIR, SUFFIX => '.tmp');
 
 print $fd generate_zoneheader($serial, ttl => $DEFAULT_TTL, %$SOA);
 for (@lines) {
