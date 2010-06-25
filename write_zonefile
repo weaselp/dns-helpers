@@ -118,6 +118,10 @@ use File::Temp qw(tempfile);
 use English;
 use YAML;
 
+use FindBin;
+use lib $FindBin::Bin;
+use DNSHelpers;
+
 my $conffile = '/etc/dns-helpers.yaml';
 $conffile = $ENV{'DNSHELPERS_CONF'} if defined $ENV{'DNSHELPERS_CONF'};
 
@@ -134,32 +138,6 @@ our $SOA = $config->{'soa'};
 
 chdir($INDIR) || die ("Cannot chdir to $INDIR: $!\n");
 
-sub newserial {
-	my $file = shift;
-	$file .= '.serial';
-	my $serial;
-	my $newserial;
-	my $today = strftime "%Y%m%d01", gmtime();
-	
-	if (-f "$OUTDIR/$file") {
-		open (SERIAL, "<", "$OUTDIR/$file") or die "Cannot open $file for reading: $!";
-		$serial = <SERIAL>;
-		defined $serial or die "Cannot read serial $file: $!";
-		close SERIAL;
-		chomp $serial;
-	}
-
-	if ((defined $serial) && ($serial >= $today)) {
-		$newserial = $serial + 1;
-	} else {
-		$newserial = $today;
-	}
-
-	open SERIAL, ">", "$OUTDIR/$file" or die "Cannot open $file for writing: $!";
-	print SERIAL "$newserial\n";
-	close SERIAL or die "Closing $file failed: $!";
-	return $newserial;
-}
 sub convert_time {
 	my $ticks = shift;
 	my $unit = shift;
@@ -187,7 +165,7 @@ sub convert_time {
 my $file = shift @ARGV;
 die "Usage: $0 <zonename>\n" unless defined $file && length($file);
 
-my $serial = newserial($file);
+my $serial = newserial($file, $OUTDIR);
 open(INFILE, '<', "$INDIR/$file") or die "Can't open $INDIR/$file: $!\n";
 my ($fd, $filename) = tempfile(DIR => $OUTDIR);
 
