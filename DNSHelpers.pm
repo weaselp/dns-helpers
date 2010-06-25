@@ -63,7 +63,7 @@ sub generate_zoneheader {
 	my ($serial, %vars) = @_;
 
 	my $header = '';
-	$header .= "\$TTL	$vars{'ttl'}" if defined $vars{'ttl'};
+	$header .= "\$TTL	$vars{'ttl'}\n" if defined $vars{'ttl'};
 	$header .= <<EOF;
 @	IN	SOA	$vars{'origin'}. $vars{'hostmaster'}. (
 	$serial	; serial number
