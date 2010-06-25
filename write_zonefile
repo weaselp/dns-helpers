@@ -215,7 +215,7 @@ if ($do_dnssec) {
 	};
 };
 
-if (! check_zonefile($zonename, $tmpzonefilename) {
+if (! check_zonefile($zonename, $tmpzonefilename)) {
 	unlink $tmpzonefilename;
 	die("ERROR: checkzone returned errors on zone $zonename - not updated.\n");
 }
