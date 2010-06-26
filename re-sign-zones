@@ -215,6 +215,7 @@ if (scalar @ARGV) {
 
 my $updates = 0;
 my $now = time();
+my $errors = 0;
 # Process files from longest zonename to shortest.
 # This is to ensure we deal with any child zones before we
 # handle their respective parent zone.
@@ -245,9 +246,11 @@ for my $zone (sort {length($b) <=> length($a)} keys %zones) {
 	unless ($params->{'dry-run'}) {
 		system($update_command, $zone);
 		warn("$update_command $zone returned non-zero exit status ".($CHILD_ERROR >> 8).".\n") if ($CHILD_ERROR >> 8 != 0);
+		$errors++;
 	};
 };
 
 if ($updates > 0 and !$params->{'verbose'}) {
 	system(@postcommand) == 0 or die "system @postcommand failed: $?\n";
 };
+exit 1 if $errors;
