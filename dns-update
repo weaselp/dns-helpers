@@ -6,7 +6,7 @@
 # End:
 
 # Copyright © Stephen Gran 2009
-# Copyright (c) 2010 Peter Palfrader <peter@palfrader.org>
+# Copyright (c) 2010, 2011 Peter Palfrader <peter@palfrader.org>
 #
 # Author: Stephen Gran <steve@lobefin.net>, Peter Palfrader
 #
@@ -126,6 +126,76 @@ sub check_files {
 	return @files;
 }
 
+sub load_vars {
+	my ($zf) = @_;
+
+	my $vars;
+
+	open(INFILE, '<', "$zf") or die "Can't open $zf: $!\n";
+	my $lineno = 0;
+	my @lines = ();
+	while (<INFILE>) {
+		$lineno++;
+		chomp;
+
+		if (/^; dnsu:\s*begin\s+(.*)\s*$/) {
+			my $linenostart = $lineno;
+			my $token = $1;
+			my $data = '';
+			my $proper_end = 0;
+			while (<INFILE>) {
+				$lineno++;
+				if (/^; dnsu:\s*end\s+(.*)\s*$/) {
+					$proper_end = 1;
+					last;
+				};
+
+				s/^; ?//;
+				$data .= $_;
+			};
+			unless ($proper_end) {
+				print STDERR "Runaway dnsu begin block for $token, starting in line $linenostart.\n";
+				return $vars;
+			};
+			$vars->{$token} = $data;
+		}
+		elsif (/^; dnsu:/) {
+			print STDERR "Unknown wzf directive in line $lineno: '$_'\n";
+		};
+	};
+	close INFILE;
+	return $vars;
+};
+
+
+sub create_named_snippet {
+	my ($fn) = @_;
+
+	my $zonename = $fn;
+	$zonename =~ s/\@/\//;
+
+	my $snip = $named_snippet;
+	my $per_zone_override = load_vars($INDIR.'/'.$fn);
+
+	$snip =~ s#\@\@ZONEFILE\@\@#$OUTDIR/$fn#g;
+	$snip =~ s#\@\@ZONENAME\@\@#$zonename#g;
+
+	for my $key (keys %$config) {
+		my ($varname) = $key =~ m/^named_var_(\S*)/;
+		next unless defined $varname;
+
+		my $data = $config->{$key};
+		$data = $per_zone_override->{$varname} if defined $per_zone_override->{$varname};
+
+		my $tmplname = uc($varname);
+		$tmplname = quotemeta($tmplname);
+
+		$snip =~ s#\@\@$tmplname\@\@#$data#g;
+	};
+
+	return $snip;
+}
+
 sub do_update {
 	my @changes = @_;
 	delete $ENV{'GIT_DIR'};
@@ -159,12 +229,8 @@ sub do_update {
 	# same sort thing as above
 	for my $file (sort {length($b) <=> length($a)} @zones) {
 		next if $file =~ /^(dsset|keyset)-/;
+		my $snip = create_named_snippet($file);
 
-		my $zonename = $file;
-		$zonename =~ s/\@/\//;
-		my $snip = $named_snippet;
-		$snip =~ s#\@\@ZONEFILE\@\@#$OUTDIR/$file#g;
-		$snip =~ s#\@\@ZONENAME\@\@#$zonename#g;
 		print $zonefd $snip;
 		unless (-f "$OUTDIR/$file") {
 			print "Updating $file (missing) ...\n";
