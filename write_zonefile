@@ -141,6 +141,7 @@ my $dnssec_signature_validity_period = undef;
 my $dnssec_key_ttl = undef;
 $dnssec_signature_validity_period = convert_time($config->{'dnssec_signature_validity_period'}) if defined $config->{'dnssec_signature_validity_period'};
 $dnssec_key_ttl = $config->{'dnssec_key_ttl'} if defined $config->{'dnssec_key_ttl'};
+my $skip_zonecheck = 0;
 
 open(INFILE, '<', "$INDIR/$zonename") or die "Can't open $INDIR/$zonename: $!\n";
 my $lineno = 0;
@@ -155,6 +156,7 @@ while (<INFILE>) {
 	elsif (/^; wzf:\s*dnssec_keyttl\s*=\s*(\d*)([smhdw]?)\s*$/) { $dnssec_key_ttl = convert_time($1, $2) }
 	elsif (/^; wzf:\s*soa_(origin|hostmaster|refresh|retry|expire|negttl)\s*=\s*(\S*)\s*$/) { $SOA->{$1} = $2 }
 	elsif (/^; wzf:\s*default_ttl\s*=\s*(\S*)\s*$/) { $DEFAULT_TTL = $1 }
+	elsif (/^; wzf:\s*skip_zonecheck\s*=\s*1\s*$/) { $skip_zonecheck = 1 }
 	elsif (/^; wzf:/) {
 		print STDERR "Unknown wzf directive in line $lineno: '$_'\n";
 	};
@@ -185,7 +187,7 @@ if ($do_dnssec) {
 	};
 };
 
-if (! check_zonefile($zonename, $tmpzonefilename)) {
+if (!($skip_zonecheck || check_zonefile($zonename, $tmpzonefilename))) {
 	unlink $tmpzonefilename;
 	die("ERROR: checkzone returned errors on zone $zonename - not updated.\n");
 }
