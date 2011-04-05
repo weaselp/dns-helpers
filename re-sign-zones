@@ -245,8 +245,10 @@ for my $zone (sort {length($b) <=> length($a)} keys %zones) {
 	$updates++;
 	unless ($params->{'dry-run'}) {
 		system($update_command, $zone);
-		warn("$update_command $zone returned non-zero exit status ".($CHILD_ERROR >> 8).".\n") if ($CHILD_ERROR >> 8 != 0);
-		$errors++;
+		if ($CHILD_ERROR >> 8 != 0) {
+			warn("$update_command $zone returned non-zero exit status ".($CHILD_ERROR >> 8).".\n") ;
+			$errors++;
+		};
 	};
 };
 
