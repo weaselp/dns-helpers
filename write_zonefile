@@ -31,7 +31,7 @@ write_zonefile - Add SOA to and optionally sign a zonefile
 
 =head1 SYNOPSIS
 
-write_zonefile <zonename>
+write_zonefile [options] <zonename>
 
 
 =head1 DESCRIPTION
@@ -56,6 +56,9 @@ If DNSSEC is enabled for a zone, B<dnssigner> is called for the zonefile
 produced as described above and the resulting signed zone is placed in the
 output directory.
 
+If an error occurs during signing, and the B<--keep-zonefile-on-errors> option
+is used, write_zonefile will not delete the (temporary) zonefile, but instead
+print its path location to stderr.
 
 =head1 CONFIGURATION OPTIONS
 
@@ -117,6 +120,7 @@ use POSIX qw(strftime);
 use File::Temp qw(tempfile);
 use English;
 use YAML;
+use Getopt::Long;
 
 use FindBin;
 use lib $FindBin::Bin;
@@ -131,8 +135,21 @@ our $SOA = $config->{'soa'};
 
 chdir($INDIR) || die ("Cannot chdir to $INDIR: $!\n");
 
+my $USAGE = "Usage: $PROGRAM_NAME [--help] | [--keep-zonefile-on-errors] <zone>\n";
+my $params;
+Getopt::Long::config('bundling');
+GetOptions (
+	'--help' => \$params->{'help'},
+	'--keep-zonefile-on-errors' => \$params->{'keep-zonefile-on-errors'},
+) or die ($USAGE);
+if ($params->{'help'}) {
+        print $USAGE;
+        exit(0);
+};
 
 my $zonename = shift @ARGV;
+die $USAGE if (scalar @ARGV > 0);
+
 die "Usage: $0 <zonename>\n" unless defined $zonename && length($zonename);
 
 
@@ -182,13 +199,21 @@ if ($do_dnssec) {
 		$dnssec_key_ttl, $dnssec_signature_validity_period);
 
 	if (!defined $ret) {
-		unlink $tmpzonefilename;
+		if ($params->{'keep-zonefile-on-errors'}) {
+			warn("zonefile is at $tmpzonefilename\n");
+		} else {
+			unlink $tmpzonefilename;
+		};
 		die("ERROR: dnssigner returned errors on zone $zonename - aborted update.\n");
 	};
 };
 
 if (!($skip_zonecheck || check_zonefile($zonename, $tmpzonefilename))) {
-	unlink $tmpzonefilename;
+	if ($params->{'keep-zonefile-on-errors'}) {
+		warn("zonefile is at $tmpzonefilename\n");
+	} else {
+		unlink $tmpzonefilename;
+	};
 	die("ERROR: checkzone returned errors on zone $zonename - not updated.\n");
 }
 rename $tmpzonefilename, "$OUTDIR/$zonename";
