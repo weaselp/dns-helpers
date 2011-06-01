@@ -242,6 +242,34 @@ sub do_update {
 	system(@postcommand) == 0 or die "system @postcommand failed: $?\n";
 }
 
+sub find_include_parents {
+	my ($files) = @_;
+
+	my @includes = ();
+	for my $file (keys %$files)  {
+		next if ( -l "$INDIR/$file" ); # ignore symlinks
+		next unless ( $file =~ m#^includes/# ); # ignore files not in /includes
+		next unless ( -f "$INDIR/$file" );
+
+		push @includes, $file;
+	};
+	return if scalar(@includes) == 0;
+	@includes = map { quotemeta($_); } @includes;
+	my $find = join('|', @includes);
+
+	opendir (D, $INDIR) or die "Can't opendir $INDIR: $!\n";
+	my @zones = grep { $_ !~ /^\./  && -f "$INDIR/$_" } readdir D;
+	closedir D;
+
+	for my $zf (@zones) {
+		open(F, '<', "$INDIR/$zf") or die "Can't open $zf: $!\n";
+		if ( grep(m#^\$INCLUDE\s+"(.*/)?($find)"\s*$#, <F>) ) {
+			$files->{$zf}++;
+		}
+		close(F);
+	}
+}
+
 umask(0002);
 for my $key (keys %ENV) {
 	next if ($key eq 'GIT_DIR');
@@ -266,4 +294,5 @@ chdir $INDIR or die "chdir $INDIR failed? $!\n";
 my @cmd = qw(git pull);
 system(@cmd) == 0 or die "system @cmd failed: $?\n";
 
+find_include_parents(\%files);
 do_update(keys %files);
