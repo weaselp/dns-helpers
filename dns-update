@@ -198,11 +198,6 @@ sub create_named_snippet {
 
 sub do_update {
 	my @changes = @_;
-	delete $ENV{'GIT_DIR'};
-	chdir $INDIR or die "chdir $INDIR failed? $!\n";
-	my @cmd = qw(git pull);
-	system(@cmd) == 0 or die "system @cmd failed: $?\n";
-	
 	# Process files from longest zonename to shortest.
 	# This is to ensure we deal with any child zones before we
 	# handle their respective parent zone.
@@ -265,5 +260,10 @@ my %files;
 for my $file (@files) {
 	$files{$file}++;
 }
+
+delete $ENV{'GIT_DIR'};
+chdir $INDIR or die "chdir $INDIR failed? $!\n";
+my @cmd = qw(git pull);
+system(@cmd) == 0 or die "system @cmd failed: $?\n";
 
 do_update(keys %files);
