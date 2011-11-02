@@ -252,7 +252,7 @@ for my $zone (sort {length($b) <=> length($a)} keys %zones) {
 	};
 };
 
-if ($updates > 0 and !$params->{'verbose'}) {
+if ($updates > 0 and !$params->{'dry-run'}) {
 	system(@postcommand) == 0 or die "system @postcommand failed: $?\n";
 };
 exit 1 if $errors;
