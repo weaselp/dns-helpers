@@ -1,0 +1,317 @@
+#!/usr/bin/python
+
+# WIP
+
+# Maintains DNSSEC keys.
+#
+# Given a list of zonenames, maintain a set of DNSSEC keys for each zone.
+# The keys for each zone live in a sub-directory of the current working
+# directory.  This subdirectory is named like the zone.
+#
+# A set of of DNSSEC keys consists of KSK and ZSK keys.  The keys will have
+# activation and deactivation times that bind starting at version 9.9 knowns
+# how to honor.  This script checks, for each zone, if sufficient keys already
+# exist to do everything for the next couple of months.  Should keys expire and
+# no keys exist to replace them, new keys are generated.
+#
+# Currently, ZSKs rotate every 3 months.  No admin interaction is needed for
+# ZSK rotation.  KSKs rotate anually.  There is a 60 day window when both the
+# old and the new KSK are active.  The admin has to use this window to replace
+# the old DS record in the parent zone with the new DS record.
+
+# TODO: maybe this script, or a sister script, should have code that queries
+# the parent zone.  If the DS record has not yet been updated and the old KSK
+# is set to be revoked/deactivated within the next week or two, the old KSK's
+# lifetime should be extended.
+
+
+# Copyright (c) 2013 Peter Palfrader <peter@palfrader.org>
+#
+# Permission is hereby granted, free of charge, to any person obtaining
+# a copy of this software and associated documentation files (the
+# "Software"), to deal in the Software without restriction, including
+# without limitation the rights to use, copy, modify, merge, publish,
+# distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so, subject to
+# the following conditions:
+#
+# The above copyright notice and this permission notice shall be
+# included in all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+# LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+# WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+import datetime
+import dns.rdata
+import dns.dnssec
+import fnmatch
+import os
+import re
+import subprocess
+import sys
+
+SETTIME='/usr/sbin/dnssec-settime'
+KEYGEN='/usr/sbin/dnssec-keygen'
+
+KEYALGO = 'RSASHA256'
+KEYSPECS = {
+    'ksk': {
+             'size': 2048,
+             'mainlife': 360,   # Days for being active (actual lifetime then adds rollover and revoked time)
+             'rollover': 60,    # For how long both keys are active
+             'revoked': 30,     # For how long to keep the revoked key around
+             'pre-create': 180  # If the latest key becomes inactive in the next x days, create new keys
+             },
+    'zsk': {
+             'size': 1536,
+             'prepub': 30,      # Days between published and active
+             'lifetime': 90,    # Days for being active
+             'postpub': 30,     # Days after becoming inactive before removing the key
+             'pre-create': 100  # If the latest key becomes inactive in the next x days, create new keys
+             }
+    }
+KSKORZSK = { True: 'ksk', False: 'zsk' }
+
+class DNSSecKeyParseError(Exception):
+    pass
+
+class DNSSecKey():
+    def __init__(self, filename):
+        self.filename = filename
+        self._loadkey()
+        self._loadtimestamps()
+
+    def _loadtimestamps(self):
+        self.ts = {}
+        for flag in 'PARID':
+            x = subprocess.check_output([SETTIME, '-u', '-p', flag, self.filename])
+            m = re.match('^([A-Za-z]*): ([0-9]*|UNSET)\n', x)
+            if not m:
+                raise Exception("Cannot process key file %s"%(self.filename,))
+            g = m.groups()
+            self.ts[g[0]] = datetime.datetime.fromtimestamp(int(g[1])) if g[1] != 'UNSET' else None
+
+    def _loadkey(self):
+        f = open(self.filename)
+        found = False
+        for line in f.readlines():
+            line = line.strip('\n')
+            if line.startswith(';'): continue
+            if line == "": continue
+            (origin, rrclass, rrtype, rdata) = line.split(None, 3)
+            found = True
+            break
+        if not found: raise DNSSecKeyParseError("No key found in %s"%(self.filename,))
+        if rrclass != 'IN': raise DNSSecKeyParseError("Unexpected rrclass %s in %s"%(rrclass, self.filename))
+        if rrtype != 'DNSKEY': raise DNSSecKeyParseError("Unexpected rrtype %s in %s"%(rrtype, self.filename))
+        self.origin = origin
+        self.rdata = rdata
+        self.key = dns.rdata.from_text(dns.rdataclass.IN, dns.rdatatype.DNSKEY, rdata)
+
+    def keytag(self):
+        return dns.dnssec.key_id(self.key)
+
+    def ds(self, digest=['SHA256']):
+        return map(lambda h:dns.dnssec.make_ds(self.origin, self.key, h), digest)
+
+    def has_sep(self):
+        return bool(self.key.flags & dns.rdtypes.ANY.DNSKEY.SEP)
+
+    def __repr__(self):
+        return "<DNSKEY %s %d %s; %s>"%(self.origin, self.key.flags, str(self.ds()[0]), self.ts)
+
+    def current(self):
+        if self.ts['Publish'] is not None:
+            if self.ts['Publish'] > datetime.datetime.now():
+                return False
+
+        if self.ts['Inactive'] is not None:
+            if self.ts['Inactive'] < datetime.datetime.now():
+                return False
+
+        return True
+
+    def timing_short(self):
+        return "Pub: %s;  Act: %s;  Inact: %s;  Del: %s;  Rev: %s" % (
+            self.ts['Publish'],
+            self.ts['Activate'],
+            self.ts['Inactive'],
+            self.ts['Delete'],
+            self.ts['Revoke'],
+            )
+
+    def eol(self):
+        return min ( self.ts['Inactive'], self.ts['Delete'], self.ts['Revoke'] )
+
+class KeySet:
+    def __init__(self, directory='.'):
+        self.path = os.path.abspath(directory)
+        self.origin = os.path.basename(directory)
+        self._loadkeys()
+
+    def _loadkeys(self):
+        wantalg = dns.dnssec.algorithm_from_text(KEYALGO)
+
+        keys = []
+        for i in os.listdir(self.path):
+            if not fnmatch.fnmatch(i, '*.key'): continue
+            k = DNSSecKey( os.path.join(self.path, i))
+            if k.key.algorithm != wantalg:
+                print >>sys.stderr, "Ignoring key %s with unwanted algorithm %d"%(i, k.key.algorithm)
+            else:
+                keys.append(k)
+
+        self.zsks = filter(lambda k: not k.has_sep(), keys)
+        self.ksks = filter(lambda k:     k.has_sep(), keys)
+
+    def _get_key(self, ksk=True):
+        if ksk:
+            return self.ksks
+        else:
+            return self.zsks
+
+    def _last_key_inactive(self, ksk=True):
+        keys = self._get_key(ksk)
+        if len(keys) >= 1:
+            return max(keys, key=lambda x: x.ts['Inactive'])
+        else:
+            return None
+
+    def _create_zsk(self, oldkey=None):
+        keyspecs = KEYSPECS[ 'zsk' ]
+        if oldkey is None:
+            print "Generating all new zsk key, to retire in %d days"%(keyspecs['lifetime'],);
+            subprocess.check_call([KEYGEN,
+                '-q',
+                '-K', self.path,
+                '-a', KEYALGO,
+                '-3',
+                '-b', '+%d'%(keyspecs['size'],),
+                '-I', '+%dd'%(keyspecs['lifetime'],),
+                '-D', '+%dd'%(keyspecs['lifetime'] + keyspecs['postpub'],),
+                self.origin])
+        else:
+            if oldkey.ts['Inactive'] is None:
+                print >>sys.stderr, "Old key has no retire date"
+            else:
+                stopusing = oldkey.ts['Inactive'] + datetime.timedelta(keyspecs['lifetime'])
+                remove = stopusing + datetime.timedelta(keyspecs['postpub'])
+                print "Generating new zsk key, to retire %s"%(stopusing.strftime('%Y%m%d%H%M%S'),);
+                subprocess.check_call([KEYGEN,
+                    '-q',
+                    '-K', self.path,
+                    '-S', oldkey.filename,
+                    '-I', stopusing.strftime('%Y%m%d%H%M%S'),
+                    '-D', remove.strftime('%Y%m%d%H%M%S'),
+                    '-i', '%dd'%(keyspecs['prepub'],),
+                    self.origin])
+        self._loadkeys()
+
+
+    def _create_ksk(self, oldkey=None):
+        keyspecs = KEYSPECS[ 'ksk' ]
+        args = []
+        if oldkey is not None:
+            eol = oldkey.eol()
+            start = eol - datetime.timedelta(keyspecs['rollover'])
+            args += [
+                '-P', start.strftime('%Y%m%d%H%M%S'),
+                '-A', start.strftime('%Y%m%d%H%M%S'),
+            ]
+        else:
+            eol = datetime.datetime.now()
+
+        revoke  = eol + datetime.timedelta(keyspecs['mainlife'])
+        stop = revoke + datetime.timedelta(keyspecs['revoked'])
+        args += [
+            '-R', revoke.strftime('%Y%m%d%H%M%S'),
+            '-I', stop.strftime('%Y%m%d%H%M%S'),
+            '-D', stop.strftime('%Y%m%d%H%M%S')
+        ]
+
+        print "Generating new ksk key, to be revoked %s"%(revoke.strftime('%Y%m%d%H%M%S'),);
+        subprocess.check_call([KEYGEN,
+            '-q',
+            '-f', 'KSK',
+            '-K', self.path,
+            '-a', KEYALGO,
+            '-3',
+            '-b', '+%d'%(keyspecs['size'],),] +
+            args + [self.origin])
+
+        self._loadkeys()
+
+    def _create_one_new_key(self, ksk=True, oldkey=None):
+        if ksk:
+            self._create_ksk(oldkey)
+        else:
+            self._create_zsk(oldkey)
+
+    def _update_key_if_needed(self, ksk):
+        oldkey = self._last_key_inactive(ksk)
+
+        if oldkey is None:
+            self._create_one_new_key(ksk)
+            return True
+        else:
+            keyspecs = KEYSPECS[ KSKORZSK[ksk] ]
+            if oldkey.ts['Inactive'] is None:
+                print >>sys.stderr, "Old key has no retire date"
+                return False
+            if oldkey.ts['Inactive'] - datetime.timedelta(keyspecs['pre-create']) < datetime.datetime.now():
+                self._create_one_new_key(ksk, oldkey)
+                return True
+            return False
+
+    def update_keys(self):
+        while self._update_key_if_needed(ksk = True): pass
+        while self._update_key_if_needed(ksk = False): pass
+
+    def ds(self, digest=['SHA256']):
+        lines = []
+        keys = self.ksks
+        keys.sort(key = lambda k: k.ts['Inactive'])
+        for k in keys:
+            if k.current():
+                lines += map(lambda x: "%s. IN DS %s; %s"%(self.origin, x, k.timing_short()), k.ds(digest))
+        return "\n".join(lines)+"\n"
+
+    def write_ds(self):
+        dsset = self.ds();
+        fn = os.path.join(self.path, 'dsset')
+
+        try:
+            need_write = file(fn).read() != dsset
+        except IOError:
+            need_write = True
+
+        if need_write:
+            with open(fn,"w") as f:
+                f.write(dsset)
+
+
+#k = DNSSecKey('Kexample.net.+005+19489.key')
+#print k.ts
+#print k.keytag()
+#print k.ds()[0]
+#print k.has_sep()
+ks = KeySet('example.com')
+ks.update_keys()
+ks.write_ds()
+#print ks.zsks
+#print ks.ksks[0].ts
+#zsk=ks._last_key_inactive(ksk=False)
+#print
+#print zsk
+#ks._create_one_new_key(False, zsk)
+#
+#print "=================="
+#ksk=ks._last_key_inactive(ksk=True)
+#print
+#print ksk
+#ks._create_one_new_key(True, ksk)
