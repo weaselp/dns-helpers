@@ -6,7 +6,7 @@
 # End:
 
 # Copyright © Stephen Gran 2009
-# Copyright (c) 2010, 2011 Peter Palfrader <peter@palfrader.org>
+# Copyright (c) 2010, 2011, 2013, 2014 Peter Palfrader <peter@palfrader.org>
 #
 # Author: Stephen Gran <steve@lobefin.net>, Peter Palfrader
 #
@@ -25,7 +25,7 @@
 
 =head1 NAME
 
-dns-update - update zonefiles changed in recent git commit
+dns-update - update bind config snippet
 
 =head1 SYNOPSIS
 
@@ -33,25 +33,21 @@ dns-update
 
 =head1 DESCRIPTION
 
-B<dns-update> is intended to be called from a git F<post-receive> hook.  It
-receives the arguments through stdin, like the hook itself, so if more items
-in the hook require that information it needs to be cloned first.
-
-It then calls B<git diff> on the revision pairs, learning which files where
-touched in this commit.
-
-Next it updates the git working copy in the input directory.
-
-We then call B<write_zonefile> to create a useable zone file for for all
-regular files learned in the git diff step above, excluding symlinks or
-directories or the like, that are in the root directory of the git repository
-
-Afterwards we loop over all the zonefiles in the input directory, producing a
-suitable B<named.conf> snippet to be included in the bind config.  Any zones
-that for some reason are not present in the output directory already are
-created at this step also.
+We loop over all the zonefiles in the input directory, producing a
+suitable B<named.conf> snippet to be included in the bind config.
 
 Lastly bind9 is reloaded.
+
+The default template and contents are defined in the dns-helpers
+configfile.  The snippet is configured in the named_snippet value
+of the seetings.  The snippet itself, or any blocks it imports, can be
+overwritten on a per-zone basis from the zonefile directly, using dnsu blocks.
+
+Example to override what was set in dns-helpers as named_var_also_notify,
+and is used in the template as @@ALSO_NOTIFY@@:
+    ; dnsu: begin also_notify
+    ;   37.247.55.151; // ns2.noreply.org
+    ; dnsu: end also_notify
 
 =head1 FILES
 
@@ -67,10 +63,6 @@ Config file location.
 =head1 ENVIRONMENT
 
 =over
-
-=item B<GIT_DIR>
-
-Location of the "parent" git repository, used by git during the git-diff phase.
 
 =item B<DNSHELPERS_CONF>
 
@@ -105,26 +97,15 @@ $conffile = $ENV{'DNSHELPERS_CONF'} if defined $ENV{'DNSHELPERS_CONF'};
 
 my $config = YAML::LoadFile $conffile;
 
-for my $key (qw{indir outdir postcommand updatecommand named_snippet}) {
+for my $key (qw{indir outdir postcommand named_snippet}) {
 	die ("$key not set in config\n") unless defined $config->{$key};
 };
 
 our $INDIR = $config->{'indir'};
 our $OUTDIR = $config->{'outdir'};
 our @postcommand = @{$config->{'postcommand'}};
-our $update_command = $config->{'updatecommand'};
 our $named_snippet = $config->{'named_snippet'};
 
-
-sub check_files {
-	my @cmd = qw(git diff --name-only);
-	push @cmd, (join '..', @_);
-	open(FILES, '-|', @cmd) or die "git log failed? $!\n";
-	my @files = (<FILES>);
-	close FILES or die "git log exited non-zero? $!\n";
-	chomp(@files);
-	return @files;
-}
 
 sub load_vars {
 	my ($zf) = @_;
@@ -177,9 +158,6 @@ sub create_named_snippet {
 	my $snip = $named_snippet;
 	my $per_zone_override = load_vars($INDIR.'/'.$fn);
 
-	$snip =~ s#\@\@ZONEFILE\@\@#$OUTDIR/$fn#g;
-	$snip =~ s#\@\@ZONENAME\@\@#$zonename#g;
-
 	for my $key (keys %$config) {
 		my ($varname) = $key =~ m/^named_var_(\S*)/;
 		next unless defined $varname;
@@ -193,106 +171,33 @@ sub create_named_snippet {
 		$snip =~ s#\@\@$tmplname\@\@#$data#g;
 	};
 
+	$snip =~ s#\@\@ZONEFILE\@\@#$OUTDIR/$fn#g;
+	$snip =~ s#\@\@ZONENAME\@\@#$zonename#g;
+
 	return $snip;
 }
 
 sub do_update {
-	my @changes = @_;
-	# Process files from longest zonename to shortest.
-	# This is to ensure we deal with any child zones before we
-	# handle their respective parent zone.
-	# E.g. we do rbl.debian.net before debian.net, thus
-	# producing the dnssec related file dsset-rbl.debian.net,
-	# which is included in the debian.net zone, before we
-	# go and create/sign the debian.net zone.
-	for my $file (sort {length($b) <=> length($a)} @changes)  {
-		next if ( -l "$INDIR/$file" ); # ignore symlinks
-		next if ( $file =~ m#/# ); # ignore files not in the repository's /
-		next unless ( -f "$INDIR/$file" );
-		print "Updating $file ...\n";
-		system($update_command, $file);
-		warn("$update_command $file returned non-zero exit status ".($CHILD_ERROR >> 8).".\n") if ($CHILD_ERROR >> 8 != 0);
-		print "done.\n";
-	}
-
 	opendir (D, $INDIR) or die "Can't opendir $INDIR: $!\n";
 	my @zones = grep { $_ !~ /^\./  && -f "$INDIR/$_" } readdir D;
 	closedir D;
 
-	my ($zonefd, $zonefile) = tempfile(DIR => $OUTDIR);
+	my ($namedfd, $namedfile) = tempfile(DIR => $OUTDIR);
 
 	# same sort thing as above
 	for my $file (sort {length($b) <=> length($a)} @zones) {
 		next if $file =~ /^(dsset|keyset)-/;
 		my $snip = create_named_snippet($file);
 
-		print $zonefd $snip;
-		unless (-f "$OUTDIR/$file") {
-			print "Updating $file (missing) ...\n";
-			system($update_command, $file);
-			warn("$update_command $file returned non-zero exit status ".($CHILD_ERROR >> 8).".\n") if ($CHILD_ERROR >> 8 != 0);
-			print "done.\n";
-		}
+		print $namedfd $snip;
 	}
 
-	close $zonefd;
-	chmod(0664, $zonefile);
-	rename $zonefile, "$OUTDIR/named.conf";
+	close $namedfd;
+	chmod(0664, $namedfile);
+	rename $namedfile, "$OUTDIR/named.conf";
 	
 	system(@postcommand) == 0 or die "system @postcommand failed: $?\n";
 }
 
-sub find_include_parents {
-	my ($files) = @_;
-
-	my @includes = ();
-	for my $file (keys %$files)  {
-		next if ( -l "$INDIR/$file" ); # ignore symlinks
-		next unless ( $file =~ m#^includes/# ); # ignore files not in /includes
-		next unless ( -f "$INDIR/$file" );
-
-		push @includes, $file;
-	};
-	return if scalar(@includes) == 0;
-	@includes = map { quotemeta($_); } @includes;
-	my $find = join('|', @includes);
-
-	opendir (D, $INDIR) or die "Can't opendir $INDIR: $!\n";
-	my @zones = grep { $_ !~ /^\./  && -f "$INDIR/$_" } readdir D;
-	closedir D;
-
-	for my $zf (@zones) {
-		open(F, '<', "$INDIR/$zf") or die "Can't open $zf: $!\n";
-		if ( grep(m#^\$INCLUDE\s+"(.*/)?($find)"\s*$#, <F>) ) {
-			$files->{$zf}++;
-		}
-		close(F);
-	}
-}
-
 umask(0002);
-for my $key (keys %ENV) {
-	next if ($key eq 'GIT_DIR');
-	delete $ENV{$key};
-}
-$ENV{'PATH'} = '/bin:/usr/bin:/sbin:/usr/sbin';
-
-my @files;
-
-while (<>) {
-	my ($oldrev, $newrev, $refname) = split;
-	push @files, (check_files($newrev, $oldrev));
-}
-
-my %files;
-for my $file (@files) {
-	$files{$file}++;
-}
-
-delete $ENV{'GIT_DIR'};
-chdir $INDIR or die "chdir $INDIR failed? $!\n";
-my @cmd = qw(git pull);
-system(@cmd) == 0 or die "system @cmd failed: $?\n";
-
-find_include_parents(\%files);
-do_update(keys %files);
+do_update();

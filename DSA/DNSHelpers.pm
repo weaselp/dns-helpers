@@ -5,7 +5,7 @@
 # End:
 
 # Copyright © Stephen Gran 2009
-# Copyright (c) 2010 Peter Palfrader <peter@palfrader.org>
+# Copyright (c) 2010, 2013, 2014 Peter Palfrader <peter@palfrader.org>
 #
 # Author: Stephen Gran <steve@lobefin.net>, Peter Palfrader
 #
@@ -36,38 +36,50 @@ DSA::DNSHelpers - some building blocks used for debian.org's DNS scripts
 package DSA::DNSHelpers;
 @ISA = qw(Exporter);
 require Exporter;
-@EXPORT = qw(new_serial generate_zoneheader sign_zonefile check_zonefile convert_time load_config);
+@EXPORT = qw(get_serial new_serial generate_zoneheader check_zonefile compile_zonefile convert_time load_config);
 
 use strict;
 use warnings;
 use POSIX qw(strftime);
 use English;
 use YAML;
+use File::Temp qw(tempfile);
 
-=item B<new_serial> ($file, $outdir)
+=item B<get_serial> ($zone, $outdir)
 
-Storing state in $outdir/$file.serial, create a new serial number for use with
+Storing state in $outdir/$zone.serial, get the current serial number for use with DNS.
+
+=cut
+sub get_serial {
+	my ($zone, $outdir) = @_;
+
+	my $filename = "$outdir/$zone.serial";
+
+	return undef unless (-f $filename);
+
+	open (SERIAL, "<", "$filename") or die "Cannot open $filename for reading: $!";
+	my $serial = <SERIAL>;
+	defined $serial or die "Cannot read serial $filename: $!";
+	close SERIAL;
+	chomp $serial;
+	return $serial;
+}
+
+=item B<new_serial> ($zone, $outdir)
+
+Storing state in $outdir/$zone.serial, create a new serial number for use with
 DNS.  This will generally be of the form YYMMDDnn, but be strictly larger than
 any previously used number (so after ..99 we roll over to the "next day" if
 necessary).
 
 =cut
-
 sub new_serial {
-	my ($file, $outdir) = @_;
+	my ($zone, $outdir) = @_;
 
-	$file .= '.serial';
-	my $serial;
 	my $newserial;
 	my $today = strftime "%Y%m%d01", gmtime();
-	
-	if (-f "$outdir/$file") {
-		open (SERIAL, "<", "$outdir/$file") or die "Cannot open $file for reading: $!";
-		$serial = <SERIAL>;
-		defined $serial or die "Cannot read serial $file: $!";
-		close SERIAL;
-		chomp $serial;
-	}
+
+	my $serial = get_serial($zone, $outdir);
 
 	if ((defined $serial) && ($serial >= $today)) {
 		$newserial = $serial + 1;
@@ -75,9 +87,11 @@ sub new_serial {
 		$newserial = $today;
 	}
 
-	open SERIAL, ">", "$outdir/$file" or die "Cannot open $file for writing: $!";
-	print SERIAL "$newserial\n";
-	close SERIAL or die "Closing $file failed: $!";
+	my ($fd, $serialfile) = tempfile("$zone.serial-XXXXXX", DIR => $outdir, SUFFIX => '.tmp');
+	print $fd "$newserial\n";
+	close $fd or die "Closing $serialfile failed: $!";
+	(chmod(0644, $serialfile) == 1) or die ("Failed to chmod serialfile: $!\n");
+	rename($serialfile, "$outdir/$zone.serial") or die ("Failed to rename serialfile to target name: $!\n");
 	return $newserial;
 }
 
@@ -138,48 +152,6 @@ EOF
 	return $header;
 }
 
-=item B<sign_zonefile> ($zonename, $zonefilename, $dnssigner, $dnssec_key_ttl, $dnssec_signature_validity_period)
-
-This signs the zone with origin at $zonename and stored in $zonefilename,
-replacing the file with a DNSSEC signed version.
-
-This function returns 0 if signing was not attempted (due to missing
-parameters), undef if signing failed, and 1 if everything went fine.
-
-It also dies if it cannot replace the file at $zonefilename with a new
-file.
-
-$dnssigner holds the path to the dnssigner script.
-
-$dnssec_key_ttl is the TTL for the DNSKEY records (optional).
-
-$dnssec_signature_validity_period is the validity period that signatures should
-have (the name kinda gives it away; optional).
-
-=cut
-sub sign_zonefile {
-	my ($zonename, $zonefilename, $dnssigner, $dnssec_key_ttl, $dnssec_signature_validity_period) = @_;
-
-	if (!defined $dnssigner) {
-		print STDERR "Warning: dnssec enabled for zone $zonename, but dnssigner not defined.  Disabling dnssec.\n";
-		return 0;
-	};
-
-	# dnssigner -e +$(( 3600 * 24 * 2 )) -o palfrader.org palfrader.org
-	my @cmd = ($dnssigner);
-	push(@cmd, '-e', '+'.$dnssec_signature_validity_period) if defined $dnssec_signature_validity_period;
-	push(@cmd, "-T", $dnssec_key_ttl) if ($dnssec_key_ttl);
-	push(@cmd, '-o', $zonename);
-	push(@cmd, $zonefilename);
-	system(@cmd);
-	if ($CHILD_ERROR >> 8 != 0) {
-		return undef;
-	}
-	rename($zonefilename.'.signed', $zonefilename) or die "Cannot rename $zonefilename.signed to $zonefilename: $!\n";
-	return 1;
-};
-
-
 =item B<check_zonefile> ($zonename, $zonefilename)
 
 Run bind's named-checkzone to check a zonefile
@@ -190,7 +162,25 @@ returns undef on errors, 1 if OK.
 sub check_zonefile {
 	my ($zonename, $zonefilename) = @_;
 
-	system(qw{/usr/sbin/named-checkzone -k fail -n fail -S fail -i full -m fail -M fail}, $zonename, $zonefilename);
+	system(qw{/usr/sbin/named-checkzone -q -k fail -n fail -S fail -i full -m fail -M fail}, $zonename, $zonefilename);
+	if ($CHILD_ERROR >> 8 != 0) {
+		system(qw{/usr/sbin/named-checkzone -k fail -n fail -S fail -i full -m fail -M fail}, $zonename, $zonefilename);
+		return undef;
+	};
+	return 1;
+}
+
+=item B<compile_zonefile> ($zonename, $zonefilename)
+
+Run bind's named-compilezone to compile a zonefile
+
+returns undef on errors, 1 if OK.
+
+=cut
+sub compile_zonefile {
+	my ($zonename, $in, $out) = @_;
+
+	system(qw{/usr/sbin/named-compilezone -q -k fail -n fail -S fail -i full -m fail -M fail -o}, $out, $zonename, $in);
 	if ($CHILD_ERROR >> 8 != 0) {
 		return undef;
 	};

@@ -6,7 +6,7 @@
 # End:
 
 # Copyright © Stephen Gran 2009
-# Copyright (c) 2010 Peter Palfrader <peter@palfrader.org>
+# Copyright (c) 2010, 2013, 2014 Peter Palfrader <peter@palfrader.org>
 #
 # Author: Stephen Gran <steve@lobefin.net>, Peter Palfrader
 #
@@ -26,7 +26,7 @@
 
 =head1 NAME
 
-write_zonefile - Add SOA to and optionally sign a zonefile
+write_zonefile - Add SOA to a zonefile
 
 
 =head1 SYNOPSIS
@@ -52,13 +52,16 @@ If B<named-checkzone> likes the new zonefile this scripts exits with 0 exit
 code and the new zonefile in the output directory.  Otherwise it exits with a
 non-zero code and without modifying the zonefile in the output directory.
 
-If DNSSEC is enabled for a zone, B<dnssigner> is called for the zonefile
-produced as described above and the resulting signed zone is placed in the
-output directory.
+=head1 OPTIONS
 
-If an error occurs during signing, and the B<--keep-zonefile-on-errors> option
-is used, write_zonefile will not delete the (temporary) zonefile, but instead
-print its path location to stderr.
+=item B<--force-update>
+
+Update the zonefile and its serial even if no data has changed.
+
+=item B<--keep-zonefile-on-errors>
+
+If named-checkzone fails a zonefile, keep the file around anyway.  Prints its
+filename.
 
 =head1 CONFIGURATION OPTIONS
 
@@ -66,8 +69,6 @@ The configuration file specifies a number of options, including SOA values.
 See B<dns-helpers.yaml.sample> for an example.  Some of these options
 can be overriden on a per-zone basis by having lines of the form
 C<wzf: I<key> = I<value>> in your input zonefile.  Valid keys include
-B<dnssec> (if set to B<1> enables dnssec for this zone),
-B<dnssec_signature_validity_period>, B<dnssec_keyttl>,
 B<soa_>{B<origin>,B<hostmaster>,B<refresh>,B<retry>,B<expire>,B<negttl>},
 and B<default_ttl>.
 
@@ -106,10 +107,6 @@ Overrides location for the configuration file.
 
 =item B<maintkeydb>
 
-=item B<dnssigner>
-
-=item B<re-sign-zones>
-
 =back
 
 =cut
@@ -121,6 +118,7 @@ use File::Temp qw(tempfile);
 use English;
 use YAML;
 use Getopt::Long;
+use File::Compare;
 
 use FindBin;
 use lib $FindBin::Bin;
@@ -133,18 +131,55 @@ our $OUTDIR = $config->{'outdir'};
 our $DEFAULT_TTL = $config->{'default_ttl'};
 our $SOA = $config->{'soa'};
 
+sub write_zonefile {
+	my ($zonename, $serial, $lines, $params) = @_;
+
+	my ($fd, $tmpzonefilename) = tempfile("$zonename.assemble-XXXXXX", DIR => $OUTDIR, SUFFIX => '.tmp');
+
+	print $fd generate_zoneheader($serial, ttl => $DEFAULT_TTL, %$SOA);
+	for (@$lines) {
+		print $fd $_;
+	};
+	close $fd;
+	chmod(0664, $tmpzonefilename);
+
+	if (!($params->{'skip_zonecheck'} || check_zonefile($zonename, $tmpzonefilename))) {
+		if ($params->{'keep-zonefile-on-errors'}) {
+			warn("zonefile is at $tmpzonefilename\n");
+		} else {
+			unlink $tmpzonefilename;
+		};
+		die("ERROR: checkzone returned errors on zone $zonename - not updated.\n");
+	}
+
+	my ($fd2, $tmpcompiledzonefilename) = tempfile("$zonename.compiled-XXXXXX", DIR => $OUTDIR, SUFFIX => '.tmp');
+	if (!compile_zonefile($zonename, $tmpzonefilename, $tmpcompiledzonefilename)) {
+		unlink $tmpzonefilename;
+		unlink $tmpcompiledzonefilename;
+		die("ERROR: compilezone returned errors on zone $zonename - not updated.\n");
+	}
+	unlink $tmpzonefilename;
+	(chmod(0644, $tmpcompiledzonefilename) == 1) or die ("Failed to chmod zone: $!\n");
+
+	return $tmpcompiledzonefilename;
+}
+
+
+
+
 chdir($INDIR) || die ("Cannot chdir to $INDIR: $!\n");
 
-my $USAGE = "Usage: $PROGRAM_NAME [--help] | [--keep-zonefile-on-errors] <zone>\n";
+my $USAGE = "Usage: $PROGRAM_NAME [--help] | [--force-update] [--keep-zonefile-on-errors] <zone>\n";
 my $params;
 Getopt::Long::config('bundling');
 GetOptions (
 	'--help' => \$params->{'help'},
+	'--force-update' => \$params->{'force-update'},
 	'--keep-zonefile-on-errors' => \$params->{'keep-zonefile-on-errors'},
 ) or die ($USAGE);
 if ($params->{'help'}) {
-        print $USAGE;
-        exit(0);
+	print $USAGE;
+	exit(0);
 };
 
 my $zonename = shift @ARGV;
@@ -153,12 +188,7 @@ die $USAGE if (scalar @ARGV > 0);
 die "Usage: $0 <zonename>\n" unless defined $zonename && length($zonename);
 
 
-my $do_dnssec = 0;
-my $dnssec_signature_validity_period = undef;
-my $dnssec_key_ttl = undef;
-$dnssec_signature_validity_period = convert_time($config->{'dnssec_signature_validity_period'}) if defined $config->{'dnssec_signature_validity_period'};
-$dnssec_key_ttl = $config->{'dnssec_key_ttl'} if defined $config->{'dnssec_key_ttl'};
-my $skip_zonecheck = 0;
+$params->{'skip_zonecheck'} = 0;
 
 open(INFILE, '<', "$INDIR/$zonename") or die "Can't open $INDIR/$zonename: $!\n";
 my $lineno = 0;
@@ -168,52 +198,26 @@ while (<INFILE>) {
 	push @lines, $_;
 	chomp;
 
-	if (/^; wzf:\s*dnssec\s*=\s*1\s*$/) { $do_dnssec = 1 }
-	elsif (/^; wzf:\s*dnssec_signature_validity_period\s*=\s*(\d+)([smhdw]?)\s*$/) { $dnssec_signature_validity_period = convert_time($1, $2) }
-	elsif (/^; wzf:\s*dnssec_keyttl\s*=\s*(\d*)([smhdw]?)\s*$/) { $dnssec_key_ttl = convert_time($1, $2) }
-	elsif (/^; wzf:\s*soa_(origin|hostmaster|refresh|retry|expire|negttl)\s*=\s*(\S*)\s*$/) { $SOA->{$1} = $2 }
+	if (/^; wzf:\s*soa_(origin|hostmaster|refresh|retry|expire|negttl)\s*=\s*(\S*)\s*$/) { $SOA->{$1} = $2 }
 	elsif (/^; wzf:\s*default_ttl\s*=\s*(\S*)\s*$/) { $DEFAULT_TTL = $1 }
-	elsif (/^; wzf:\s*skip_zonecheck\s*=\s*1\s*$/) { $skip_zonecheck = 1 }
+	elsif (/^; wzf:\s*skip_zonecheck\s*=\s*1\s*$/) { $params->{'skip_zonecheck'} = 1 }
+	elsif (/^; wzf:\s*dnssec\s*=\s*(\S*)\s*$/) { 1; } # nothing
 	elsif (/^; wzf:/) {
 		print STDERR "Unknown wzf directive in line $lineno: '$_'\n";
 	};
 };
 close INFILE;
 
+my $targetfilename = "$OUTDIR/$zonename";
 
+unless ($params->{'force-update'}) {
+	my $serial = get_serial($zonename, $OUTDIR);
+	my $tmpzonefilename = write_zonefile($zonename, $serial, \@lines, $params);
+
+	exit 0 if (compare($tmpzonefilename, $targetfilename) == 0);
+}
 
 my $serial = new_serial($zonename, $OUTDIR);
-my ($fd, $tmpzonefilename) = tempfile(DIR => $OUTDIR, SUFFIX => '.tmp');
+my $tmpzonefilename = write_zonefile($zonename, $serial, \@lines, $params);
 
-print $fd generate_zoneheader($serial, ttl => $DEFAULT_TTL, %$SOA);
-for (@lines) {
-	print $fd $_;
-};
-
-close $fd;
-chmod(0664, $tmpzonefilename);
-
-if ($do_dnssec) {
-	my $ret = sign_zonefile($zonename, $tmpzonefilename,
-		$config->{'dnssigner'},
-		$dnssec_key_ttl, $dnssec_signature_validity_period);
-
-	if (!defined $ret) {
-		if ($params->{'keep-zonefile-on-errors'}) {
-			warn("zonefile is at $tmpzonefilename\n");
-		} else {
-			unlink $tmpzonefilename;
-		};
-		die("ERROR: dnssigner returned errors on zone $zonename - aborted update.\n");
-	};
-};
-
-if (!($skip_zonecheck || check_zonefile($zonename, $tmpzonefilename))) {
-	if ($params->{'keep-zonefile-on-errors'}) {
-		warn("zonefile is at $tmpzonefilename\n");
-	} else {
-		unlink $tmpzonefilename;
-	};
-	die("ERROR: checkzone returned errors on zone $zonename - not updated.\n");
-}
-rename $tmpzonefilename, "$OUTDIR/$zonename";
+rename($tmpzonefilename, $targetfilename) or die ("Failed to rename zone to target name: $!\n");
