@@ -214,7 +214,10 @@ unless ($params->{'force-update'}) {
 	my $serial = get_serial($zonename, $OUTDIR);
 	my $tmpzonefilename = write_zonefile($zonename, $serial, \@lines, $params);
 
-	exit 0 if (compare($tmpzonefilename, $targetfilename) == 0);
+	if (compare($tmpzonefilename, $targetfilename) == 0) {
+		unlink($tmpzonefilename);
+		exit 0;
+	}
 }
 
 my $serial = new_serial($zonename, $OUTDIR);
