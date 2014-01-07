@@ -63,6 +63,19 @@ Update the zonefile and its serial even if no data has changed.
 If named-checkzone fails a zonefile, keep the file around anyway.  Prints its
 filename.
 
+=item B<--skip-zonecheck>
+
+Do not run zonecheck on zone prior to compiling it.  (Note that compile runs most
+checks also, so this isn't too useful anymore.)  Can be set per-zone in the zonefile
+itself using B<; wzf: skip-zonecheck = 1> on a line by itself.
+
+=item B<--no-integrity-checks>
+
+Do not require integrity checks to pass (i.e. targets of MX records need not
+have A records etc.) - see B<named-checkzone>(8) for details.
+Can be set per-zone in the zonefile itself using
+B<; wzf: no-integrity-checks = 1> on a line by itself.
+
 =head1 CONFIGURATION OPTIONS
 
 The configuration file specifies a number of options, including SOA values.
@@ -143,7 +156,7 @@ sub write_zonefile {
 	close $fd;
 	chmod(0664, $tmpzonefilename);
 
-	if (!($params->{'skip_zonecheck'} || check_zonefile($zonename, $tmpzonefilename))) {
+	if (!($params->{'skip-zonecheck'} || check_zonefile($zonename, $tmpzonefilename, %$params))) {
 		if ($params->{'keep-zonefile-on-errors'}) {
 			warn("zonefile is at $tmpzonefilename\n");
 		} else {
@@ -175,6 +188,8 @@ Getopt::Long::config('bundling');
 GetOptions (
 	'--help' => \$params->{'help'},
 	'--force-update' => \$params->{'force-update'},
+	'--skip-zonecheck' => \$params->{'skip-zonecheck'},
+	'--no-integrity-checks' => \$params->{'no-integrity-checks'},
 	'--keep-zonefile-on-errors' => \$params->{'keep-zonefile-on-errors'},
 ) or die ($USAGE);
 if ($params->{'help'}) {
@@ -187,9 +202,6 @@ die $USAGE if (scalar @ARGV > 0);
 
 die "Usage: $0 <zonename>\n" unless defined $zonename && length($zonename);
 
-
-$params->{'skip_zonecheck'} = 0;
-
 open(INFILE, '<', "$INDIR/$zonename") or die "Can't open $INDIR/$zonename: $!\n";
 my $lineno = 0;
 my @lines = ();
@@ -200,7 +212,8 @@ while (<INFILE>) {
 
 	if (/^; wzf:\s*soa_(origin|hostmaster|refresh|retry|expire|negttl)\s*=\s*(\S*)\s*$/) { $SOA->{$1} = $2 }
 	elsif (/^; wzf:\s*default_ttl\s*=\s*(\S*)\s*$/) { $DEFAULT_TTL = $1 }
-	elsif (/^; wzf:\s*skip_zonecheck\s*=\s*1\s*$/) { $params->{'skip_zonecheck'} = 1 }
+	elsif (/^; wzf:\s*skip[-_]zonecheck\s*=\s*1\s*$/) { $params->{'skip-zonecheck'} = 1 }
+	elsif (/^; wzf:\s*no-integrity-checks\s*=\s*1\s*$/) { $params->{'no-integrity-checks'} = 1 }
 	elsif (/^; wzf:\s*dnssec\s*=\s*(\S*)\s*$/) { 1; } # nothing
 	elsif (/^; wzf:/) {
 		print STDERR "Unknown wzf directive in line $lineno: '$_'\n";

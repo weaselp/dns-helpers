@@ -160,9 +160,12 @@ returns undef on errors, 1 if OK.
 
 =cut
 sub check_zonefile {
-	my ($zonename, $zonefilename) = @_;
+	my ($zonename, $zonefilename, %options) = @_;
 
-	system(qw{/usr/sbin/named-checkzone -q -k fail -n fail -S fail -i full -m fail -M fail}, $zonename, $zonefilename);
+	my $integrity_check = 'full';
+	$integrity_check = 'none' if $options{'no-integrity-checks'};
+
+	system(qw{/usr/sbin/named-checkzone -q -k fail -n fail -S fail -m fail -M fail -i}, $integrity_check, $zonename, $zonefilename);
 	if ($CHILD_ERROR >> 8 != 0) {
 		system(qw{/usr/sbin/named-checkzone -k fail -n fail -S fail -i full -m fail -M fail}, $zonename, $zonefilename);
 		return undef;
@@ -180,7 +183,7 @@ returns undef on errors, 1 if OK.
 sub compile_zonefile {
 	my ($zonename, $in, $out) = @_;
 
-	system(qw{/usr/sbin/named-compilezone -q -k fail -n fail -S fail -i full -m fail -M fail -o}, $out, $zonename, $in);
+	system(qw{/usr/sbin/named-compilezone -q -k fail -n fail -S fail -i none -m fail -M fail -o}, $out, $zonename, $in);
 	if ($CHILD_ERROR >> 8 != 0) {
 		return undef;
 	};
