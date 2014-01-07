@@ -36,14 +36,33 @@ DSA::DNSHelpers - some building blocks used for debian.org's DNS scripts
 package DSA::DNSHelpers;
 @ISA = qw(Exporter);
 require Exporter;
-@EXPORT = qw(get_serial new_serial generate_zoneheader check_zonefile compile_zonefile convert_time load_config);
+@EXPORT = qw(safe_write get_serial new_serial generate_zoneheader check_zonefile compile_zonefile sign_zonefile convert_time load_config);
 
 use strict;
 use warnings;
 use POSIX qw(strftime);
 use English;
+use File::Basename;
 use YAML;
 use File::Temp qw(tempfile);
+
+=item B<get_serial> ($target, $content)
+
+Write content to file (using write/rename)
+
+=cut
+sub safe_write {
+	my $target = shift;
+	my $content = shift;
+
+	my $outdir = dirname($target);
+	my ($fd, $tmpfilename) = tempfile(DIR => $outdir, SUFFIX => '.tmp');
+	print $fd $content;
+	close $fd;
+	chmod(0664, $tmpfilename);
+
+	rename $tmpfilename, $target or die "Cannot rename $tmpfilename to $target: $!\n";
+}
 
 =item B<get_serial> ($zone, $outdir)
 
@@ -187,6 +206,47 @@ sub compile_zonefile {
 	if ($CHILD_ERROR >> 8 != 0) {
 		return undef;
 	};
+	return 1;
+}
+
+=item B<sign_zonefile> ($zonename, $zonefile, %options)
+
+Sign a zonefile with the proper keys.
+
+returns undef on errors, 1 if OK.
+
+=cut
+sub sign_zonefile {
+	my ($zonename, $zonefile, %options) = @_;
+
+	my $outdir = dirname($zonefile);
+	my ($fd, $tmpfile) = tempfile("$zonename.signed-XXXXXX", DIR => $outdir, SUFFIX => '.tmp');
+	close $fd;
+	chmod(0664, $tmpfile);
+
+	die("No keydir in options\n") unless defined $options{'keydir'};
+
+	my @cmd = ();
+	push @cmd, '/usr/bin/chronic';
+	push @cmd, '/usr/sbin/dnssec-signzone';
+	push @cmd, '-S'; # smart, pick the right keys automatically
+	push @cmd, '-K', $options{'keydir'}."/$zonename";
+	push @cmd, '-d', $options{'keydir'}."/$zonename";
+	push @cmd, '-o', $zonename;
+	push @cmd, '-f', "$tmpfile";
+	push(@cmd, '-z') if $options{'single-key-ops'};
+	push(@cmd, '-T', $options{'dnskey-ttl'}) if $options{'dnskey-ttl'};
+	push @cmd, "$zonefile";
+	#print join(" ", @cmd),"\n";
+
+	system(@cmd);
+
+	if ($CHILD_ERROR >> 8 != 0) {
+		unlink $tmpfile;
+		return undef;
+	};
+
+	rename $tmpfile, $zonefile or die "Cannot rename $tmpfile to $zonefile: $!\n";
 	return 1;
 }
 

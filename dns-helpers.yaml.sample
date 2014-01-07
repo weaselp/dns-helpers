@@ -1,8 +1,10 @@
 --- 
 indir: '/var/cache/bind/git/domains'
 outdir: '/var/cache/bind/generated'
-outdir-geo: '/srv/dns.debian.org/geo/generated/etc/bind/geodns'
+outdir-geo: '/srv/dns.debian.org/var/geodns/etc/bind/geodns'
+statedir-geo: '/srv/dns.debian.org/var/geodns-state'
 outdir-auto: '/srv/dns.debian.org/var/services-auto'
+keydir: '/srv/dns.debian.org/var/keys'
 bindzonedir-geo: '/etc/bind/geodns/zonefiles'
 postcommand: [sudo, /etc/init.d/bind9, reload]
 named_snippet: |
