@@ -25,7 +25,7 @@
 # lifetime should be extended.
 
 
-# Copyright (c) 2013 Peter Palfrader <peter@palfrader.org>
+# Copyright (c) 2013, 2014 Peter Palfrader <peter@palfrader.org>
 #
 # Permission is hereby granted, free of charge, to any person obtaining
 # a copy of this software and associated documentation files (the
@@ -50,32 +50,40 @@ import datetime
 import dns.rdata
 import dns.dnssec
 import fnmatch
+import optparse
 import os
+import stat
 import re
 import subprocess
 import sys
+import yaml
 
 SETTIME='/usr/sbin/dnssec-settime'
 KEYGEN='/usr/sbin/dnssec-keygen'
 
 KEYALGO = 'RSASHA256'
+PRECREATE = 180  # If the latest key becomes inactive in the next x days, create new keys
 KEYSPECS = {
     'ksk': {
              'size': 2048,
              'mainlife': 360,   # Days for being active (actual lifetime then adds rollover and revoked time)
              'rollover': 60,    # For how long both keys are active
              'revoked': 30,     # For how long to keep the revoked key around
-             'pre-create': 180  # If the latest key becomes inactive in the next x days, create new keys
              },
     'zsk': {
              'size': 1536,
              'prepub': 30,      # Days between published and active
              'lifetime': 90,    # Days for being active
-             'postpub': 30,     # Days after becoming inactive before removing the key
-             'pre-create': 100  # If the latest key becomes inactive in the next x days, create new keys
-             }
+             'postpub': 10,     # Days after becoming inactive before removing the key
+             },
+    # we effectively use a Double-Signature Zone Signing Key Rollover scheme here
+    'single-key-child': {
+             'size': 1536,
+             'mainlife': 90,    # Days for being active (actual lifetime then adds rollover and revoked time)
+             'rollover': 10,    # For how long both keys are active
+             'revoked': 0,      # For how long to keep the revoked key around
+             },
     }
-KSKORZSK = { True: 'ksk', False: 'zsk' }
 
 class DNSSecKeyParseError(Exception):
     pass
@@ -146,15 +154,17 @@ class DNSSecKey():
             )
 
     def eol(self):
-        return min ( self.ts['Inactive'], self.ts['Delete'], self.ts['Revoke'] )
+        timestamps = filter(lambda k: k is not None, [ self.ts['Inactive'], self.ts['Delete'], self.ts['Revoke'] ])
+
+        return min(timestamps)
 
 class KeySet:
-    def __init__(self, directory='.'):
+    def __init__(self, directory='.', prefer_single_keytpe = False):
         self.path = os.path.abspath(directory)
         self.origin = os.path.basename(directory)
-        self._loadkeys()
+        self._loadkeys(prefer_single_keytpe)
 
-    def _loadkeys(self):
+    def _loadkeys(self, prefer_single_keytpe=False):
         wantalg = dns.dnssec.algorithm_from_text(KEYALGO)
 
         keys = []
@@ -169,14 +179,29 @@ class KeySet:
         self.zsks = filter(lambda k: not k.has_sep(), keys)
         self.ksks = filter(lambda k:     k.has_sep(), keys)
 
-    def _get_key(self, ksk=True):
-        if ksk:
-            return self.ksks
+        if len(self.ksks) == 0 and len(self.zsks) == 0:
+            self.single_keytype_zone = prefer_single_keytpe
+        elif len(self.ksks) == 0 and len(self.zsks) > 0:
+            self.single_keytype_zone = True
         else:
-            return self.zsks
+            self.single_keytype_zone = False
+
+    def _fixperms(self):
+        for i in os.listdir(self.path):
+            if not fnmatch.fnmatch(i, '*.private'): continue
+            fn = os.path.join(self.path, i)
+            st = os.stat(fn)
+            if not st.st_mode & stat.S_IRGRP:
+                os.chmod(fn, st.st_mode | stat.S_IRGRP)
 
     def _last_key_inactive(self, ksk=True):
-        keys = self._get_key(ksk)
+        if self.single_keytype_zone:
+            keys = self.zsks
+        elif ksk:
+            keys = self.ksks
+        else:
+            keys = self.zsks
+
         if len(keys) >= 1:
             return max(keys, key=lambda x: x.ts['Inactive'])
         else:
@@ -210,11 +235,17 @@ class KeySet:
                     '-D', remove.strftime('%Y%m%d%H%M%S'),
                     '-i', '%dd'%(keyspecs['prepub'],),
                     self.origin])
+        self._fixperms()
         self._loadkeys()
 
 
-    def _create_ksk(self, oldkey=None):
-        keyspecs = KEYSPECS[ 'ksk' ]
+    def _create_ksk_or_singlekey(self, oldkey=None):
+        if self.single_keytype_zone:
+            keyspecs = KEYSPECS[ 'single-key-child' ]
+            keytype = 'single-type'
+        else:
+            keyspecs = KEYSPECS[ 'ksk' ]
+            keytype = 'ksk'
         args = []
         if oldkey is not None:
             eol = oldkey.eol()
@@ -228,27 +259,30 @@ class KeySet:
 
         revoke  = eol + datetime.timedelta(keyspecs['mainlife'])
         stop = revoke + datetime.timedelta(keyspecs['revoked'])
+        if revoke != stop:
+            args += [ '-R', revoke.strftime('%Y%m%d%H%M%S') ]
         args += [
-            '-R', revoke.strftime('%Y%m%d%H%M%S'),
             '-I', stop.strftime('%Y%m%d%H%M%S'),
             '-D', stop.strftime('%Y%m%d%H%M%S')
         ]
+        if not self.single_keytype_zone:
+            args += [ '-f', 'KSK' ]
 
-        print "Generating new ksk key, to be revoked %s"%(revoke.strftime('%Y%m%d%H%M%S'),);
+        print "Generating new %s key, to be revoked/retired %s"%(keytype, revoke.strftime('%Y%m%d%H%M%S'),);
         subprocess.check_call([KEYGEN,
             '-q',
-            '-f', 'KSK',
             '-K', self.path,
             '-a', KEYALGO,
             '-3',
             '-b', '+%d'%(keyspecs['size'],),] +
             args + [self.origin])
 
+        self._fixperms()
         self._loadkeys()
 
     def _create_one_new_key(self, ksk=True, oldkey=None):
-        if ksk:
-            self._create_ksk(oldkey)
+        if ksk or self.single_keytype_zone:
+            self._create_ksk_or_singlekey(oldkey)
         else:
             self._create_zsk(oldkey)
 
@@ -259,11 +293,10 @@ class KeySet:
             self._create_one_new_key(ksk)
             return True
         else:
-            keyspecs = KEYSPECS[ KSKORZSK[ksk] ]
             if oldkey.ts['Inactive'] is None:
                 print >>sys.stderr, "Old key has no retire date"
                 return False
-            if oldkey.ts['Inactive'] - datetime.timedelta(keyspecs['pre-create']) < datetime.datetime.now():
+            if oldkey.ts['Inactive'] - datetime.timedelta(PRECREATE) < datetime.datetime.now():
                 self._create_one_new_key(ksk, oldkey)
                 return True
             return False
@@ -272,17 +305,20 @@ class KeySet:
         while self._update_key_if_needed(ksk = True): pass
         while self._update_key_if_needed(ksk = False): pass
 
-    def ds(self, digest=['SHA256']):
+    def ds(self, digest=['SHA256'], ttl=''):
         lines = []
-        keys = self.ksks
+        if self.single_keytype_zone:
+            keys = self.zsks
+        else:
+            keys = self.ksks
         keys.sort(key = lambda k: k.ts['Inactive'])
         for k in keys:
             if k.current():
-                lines += map(lambda x: "%s. IN DS %s; %s"%(self.origin, x, k.timing_short()), k.ds(digest))
+                lines += map(lambda x: "%s. %s IN DS %s; %s"%(self.origin, ttl, x, k.timing_short()), k.ds(digest))
         return "\n".join(lines)+"\n"
 
-    def write_ds(self):
-        dsset = self.ds();
+    def write_ds(self, ttl=''):
+        dsset = self.ds(ttl=ttl);
         fn = os.path.join(self.path, 'dsset')
 
         try:
@@ -295,23 +331,30 @@ class KeySet:
                 f.write(dsset)
 
 
-#k = DNSSecKey('Kexample.net.+005+19489.key')
-#print k.ts
-#print k.keytag()
-#print k.ds()[0]
-#print k.has_sep()
-ks = KeySet('example.com')
-ks.update_keys()
-ks.write_ds()
-#print ks.zsks
-#print ks.ksks[0].ts
-#zsk=ks._last_key_inactive(ksk=False)
-#print
-#print zsk
-#ks._create_one_new_key(False, zsk)
-#
-#print "=================="
-#ksk=ks._last_key_inactive(ksk=True)
-#print
-#print ksk
-#ks._create_one_new_key(True, ksk)
+if 'DNSHELPERS_CONF' in os.environ:
+    conffile = os.environ['DNSHELPERS_CONF']
+else:
+    conffile = '/etc/dns-helpers.yaml'
+config = yaml.load(open(conffile).read())
+
+parser = optparse.OptionParser()
+parser.set_usage("%prog [options] zone [zones]")
+parser.add_option("--single-key-type", dest="single_key_type", default=False, action="store_true",
+    help="When creating new keys initially, set up the zone with only a single key-type instead of a standard ksk/zsk split.")
+parser.add_option("--key-dir", dest="keydir", metavar='DIR', default=config['keydir'],
+    help="Directory that holds the keys.")
+parser.add_option("--ds-ttl", dest="dsttl", metavar='TTL', default='',
+    help="TTL of DS records.")
+(options, args) = parser.parse_args()
+
+if len(args) < 1:
+    parser.print_help()
+    sys.exit(1)
+
+for d in args:
+    p = os.path.join(options.keydir, d)
+    if not os.path.exists(p):
+        os.mkdir(p)
+    ks = KeySet(p, prefer_single_keytpe=options.single_key_type)
+    ks.update_keys()
+    ks.write_ds(ttl=options.dsttl)
