@@ -73,14 +73,14 @@ KEYSPECS = {
     'zsk': {
              'size': 1536,
              'prepub': 30,      # Days between published and active
-             'lifetime': 90,    # Days for being active
-             'postpub': 10,     # Days after becoming inactive before removing the key
+             'lifetime': 120,    # Days for being active
+             'postpub': 30,     # Days after becoming inactive before removing the key
              },
     # we effectively use a Double-Signature Zone Signing Key Rollover scheme here
     'single-key-child': {
              'size': 1536,
              'mainlife': 90,    # Days for being active (actual lifetime then adds rollover and revoked time)
-             'rollover': 10,    # For how long both keys are active
+             'rollover': 20,    # For how long both keys are active
              'revoked': 0,      # For how long to keep the revoked key around
              },
     }
