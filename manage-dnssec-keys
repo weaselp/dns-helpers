@@ -414,21 +414,32 @@ class KeySet:
         warn = []
         crit = []
         now = datetime.datetime.now()
+        wantalg = dns.dnssec.algorithm_from_text(KEYALGO)
 
-        ans = dns.resolver.query(self.origin, 'DS')
+        try:
+            ans = dns.resolver.query(self.origin, 'DS')
+        except dns.exception.Timeout:
+            warn += ["Query for DS failed."]
+            ans = []
+        except dns.resolver.NoAnswer:
+            ans = []
+
         for rdata in ans:
             if rdata.rdtype != dns.rdatatype.DS: continue
             keytag = rdata.key_tag
+            if rdata.algorithm != wantalg:
+                warn += ["Unexpected algorithm found in DS (digest type %d) for key %d."%(rdata.digest_type, keytag,)]
+                continue
 
             try:
                 dnskey = self[keytag]
             except KeyError:
-                crit += ["No key for DS with keytag %d."%(keytag,)]
+                crit += ["No key for DS (digest type %d) with keytag %d."%(rdata.digest_type, keytag,)]
                 continue
 
             ds = dnskey.ds(digest = [ds_dignum_to_name(rdata.digest_type)])[0]
             if ds != rdata:
-                crit += ["mismatched DS for key %d."%(keytag,)]
+                crit += ["mismatched DS (digest type %d) for key %d."%(rdata.digest_type, keytag,)]
                 continue
 
             if now > dnskey.eol():
@@ -438,6 +449,7 @@ class KeySet:
             if now + datetime.timedelta(KEYLIFETIME_DS_EXTEND) > dnskey.eol():
                 crit += ["Key %d about to expire.  Moved a bit into the future."%(keytag,)]
                 dnskey.extend_life()
+                self._fixperms()
             elif now + datetime.timedelta(KEYLIFETIME_DS_CRIT) > dnskey.eol():
                 crit += ["Key %d about to expire."%(keytag,)]
             elif now + datetime.timedelta(KEYLIFETIME_DS_WARN) > dnskey.eol():
@@ -496,11 +508,11 @@ if options.mode == "ds-check":
         print "WARN:", ",".join(status['warn'].keys()), "; ",
         if ec is None: ec = 1
     if len(status['ok']) > 0:
-        print "OK:", ",".join(status['ok'].keys()), "; ",
+        print "OK:", len(status['ok']),
         if ec is None: ec = 0
     print
     for s in ('crit', 'warn'):
         for d in status[s]:
             for l in status[s][d]:
                 print "%s: %s"%(d, l)
-    sys.exit(0)
+    sys.exit(ec)
