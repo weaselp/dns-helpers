@@ -49,6 +49,8 @@
 import datetime
 import dns.rdata
 import dns.dnssec
+import dns.ttl
+import dns.zone
 import fnmatch
 import optparse
 import os
@@ -89,8 +91,9 @@ class DNSSecKeyParseError(Exception):
     pass
 
 class DNSSecKey():
-    def __init__(self, filename):
+    def __init__(self, filename, origin):
         self.filename = filename
+        self.origin = origin + '.'
         self._loadkey()
         self._loadtimestamps()
 
@@ -105,24 +108,27 @@ class DNSSecKey():
             self.ts[g[0]] = datetime.datetime.fromtimestamp(int(g[1])) if g[1] != 'UNSET' else None
 
     def _loadkey(self):
-        f = open(self.filename)
-        found = False
-        for line in f.readlines():
-            line = line.strip('\n')
-            if line.startswith(';'): continue
-            if line == "": continue
-            (origin, rrclass, rrtype, rdata) = line.split(None, 3)
-            found = True
-            break
-        if not found: raise DNSSecKeyParseError("No key found in %s"%(self.filename,))
-        if rrclass != 'IN': raise DNSSecKeyParseError("Unexpected rrclass %s in %s"%(rrclass, self.filename))
-        if rrtype != 'DNSKEY': raise DNSSecKeyParseError("Unexpected rrtype %s in %s"%(rrtype, self.filename))
-        self.origin = origin
-        self.rdata = rdata
-        self.key = dns.rdata.from_text(dns.rdataclass.IN, dns.rdatatype.DNSKEY, rdata)
+        z = dns.zone.from_file(self.filename, origin=self.origin, check_origin=False)
+        apex = z['@']
+        rdataset = apex.rdatasets[0]
+        if rdataset.rdtype != dns.rdatatype.DNSKEY: raise DNSSecKeyParseError("Invalid rdtype loaded from %s"%(self.filename,))
+        self.rdataset = rdataset
+        dnskey = rdataset[0]
+        if dnskey.rdtype != dns.rdatatype.DNSKEY: raise DNSSecKeyParseError("Invalid dnskey loaded from %s"%(self.filename,))
+        self.key = dnskey
 
     def keytag(self):
         return dns.dnssec.key_id(self.key)
+
+    def ttl(self):
+        if self.rdataset.ttl > 0:
+            return self.rdataset.ttl
+        return None
+
+    def set_ttl(self, ttl):
+        if ttl is None:
+            return
+        subprocess.check_call([SETTIME, '-L', str(ttl), self.filename])
 
     def ds(self, digest=['SHA256']):
         return map(lambda h:dns.dnssec.make_ds(self.origin, self.key, h), digest)
@@ -159,10 +165,15 @@ class DNSSecKey():
         return min(timestamps)
 
 class KeySet:
-    def __init__(self, directory='.', prefer_single_keytpe = False):
+    def __init__(self, directory='.', prefer_single_keytpe = False, ttl = None):
         self.path = os.path.abspath(directory)
         self.origin = os.path.basename(directory)
         self._loadkeys(prefer_single_keytpe)
+        if ttl is None:
+            self._load_ttl()
+        else:
+            self.ttl = dns.ttl.from_text(ttl)
+        self._rewrite_ttl()
 
     def _loadkeys(self, prefer_single_keytpe=False):
         wantalg = dns.dnssec.algorithm_from_text(KEYALGO)
@@ -170,7 +181,7 @@ class KeySet:
         keys = []
         for i in os.listdir(self.path):
             if not fnmatch.fnmatch(i, '*.key'): continue
-            k = DNSSecKey( os.path.join(self.path, i))
+            k = DNSSecKey(os.path.join(self.path, i), origin=self.origin)
             if k.key.algorithm != wantalg:
                 print >>sys.stderr, "Ignoring key %s with unwanted algorithm %d"%(i, k.key.algorithm)
             else:
@@ -185,6 +196,24 @@ class KeySet:
             self.single_keytype_zone = True
         else:
             self.single_keytype_zone = False
+
+    def _load_ttl(self):
+        ttls = map(lambda x: x.ttl(), self.zsks + self.ksks)
+        ttls = filter(lambda x: x is not None, ttls)
+        min_ttl = min(ttls)
+        self.ttl = min_ttl
+
+    def _rewrite_ttl(self):
+        if self.ttl is None:
+            return
+
+        changed = False
+        for x in self.zsks + self.ksks:
+            if x.ttl() != self.ttl:
+                x.set_ttl(self.ttl)
+                changed = True
+        if changed:
+            self._fixperms()
 
     def _fixperms(self):
         for i in os.listdir(self.path):
@@ -211,7 +240,10 @@ class KeySet:
         keyspecs = KEYSPECS[ 'zsk' ]
         if oldkey is None:
             print "Generating all new zsk key, to retire in %d days"%(keyspecs['lifetime'],);
-            subprocess.check_call([KEYGEN,
+            args = [KEYGEN]
+            if self.ttl is not None:
+                args += ['-L', str(self.ttl) ]
+            args += [
                 '-q',
                 '-K', self.path,
                 '-a', KEYALGO,
@@ -219,7 +251,8 @@ class KeySet:
                 '-b', '+%d'%(keyspecs['size'],),
                 '-I', '+%dd'%(keyspecs['lifetime'],),
                 '-D', '+%dd'%(keyspecs['lifetime'] + keyspecs['postpub'],),
-                self.origin])
+                self.origin]
+            subprocess.check_call(args)
         else:
             if oldkey.ts['Inactive'] is None:
                 print >>sys.stderr, "Old key has no retire date"
@@ -227,14 +260,18 @@ class KeySet:
                 stopusing = oldkey.ts['Inactive'] + datetime.timedelta(keyspecs['lifetime'])
                 remove = stopusing + datetime.timedelta(keyspecs['postpub'])
                 print "Generating new zsk key, to retire %s"%(stopusing.strftime('%Y%m%d%H%M%S'),);
-                subprocess.check_call([KEYGEN,
+                args = [KEYGEN]
+                if self.ttl is not None:
+                    args += ['-L', str(self.ttl) ]
+                args += [
                     '-q',
                     '-K', self.path,
                     '-S', oldkey.filename,
                     '-I', stopusing.strftime('%Y%m%d%H%M%S'),
                     '-D', remove.strftime('%Y%m%d%H%M%S'),
                     '-i', '%dd'%(keyspecs['prepub'],),
-                    self.origin])
+                    self.origin]
+                subprocess.check_call(args)
         self._fixperms()
         self._loadkeys()
 
@@ -267,6 +304,8 @@ class KeySet:
         ]
         if not self.single_keytype_zone:
             args += [ '-f', 'KSK' ]
+        if self.ttl is not None:
+            args += ['-L', str(self.ttl) ]
 
         print "Generating new %s key, to be revoked/retired %s"%(keytype, revoke.strftime('%Y%m%d%H%M%S'),);
         subprocess.check_call([KEYGEN,
@@ -305,20 +344,26 @@ class KeySet:
         while self._update_key_if_needed(ksk = True): pass
         while self._update_key_if_needed(ksk = False): pass
 
-    def ds(self, digest=['SHA256'], ttl=''):
+    def ds(self, digest=['SHA256']):
         lines = []
         if self.single_keytype_zone:
             keys = self.zsks
         else:
             keys = self.ksks
         keys.sort(key = lambda k: k.ts['Inactive'])
+
+        if self.ttl is not None:
+            ttl=self.ttl
+        else:
+            ttl=''
+
         for k in keys:
             if k.current():
                 lines += map(lambda x: "%s. %s IN DS %s; %s"%(self.origin, ttl, x, k.timing_short()), k.ds(digest))
         return "\n".join(lines)+"\n"
 
-    def write_ds(self, ttl=''):
-        dsset = self.ds(ttl=ttl);
+    def write_ds(self):
+        dsset = self.ds()
         fn = os.path.join(self.path, 'dsset')
 
         try:
@@ -343,7 +388,7 @@ parser.add_option("--single-key-type", dest="single_key_type", default=False, ac
     help="When creating new keys initially, set up the zone with only a single key-type instead of a standard ksk/zsk split.")
 parser.add_option("--key-dir", dest="keydir", metavar='DIR', default=config['keydir'],
     help="Directory that holds the keys.")
-parser.add_option("--ds-ttl", dest="dsttl", metavar='TTL', default='',
+parser.add_option("--ttl", dest="ttl", metavar='TTL',
     help="TTL of DS records.")
 (options, args) = parser.parse_args()
 
@@ -355,6 +400,6 @@ for d in args:
     p = os.path.join(options.keydir, d)
     if not os.path.exists(p):
         os.mkdir(p)
-    ks = KeySet(p, prefer_single_keytpe=options.single_key_type)
+    ks = KeySet(p, prefer_single_keytpe=options.single_key_type, ttl=options.ttl)
     ks.update_keys()
-    ks.write_ds(ttl=options.dsttl)
+    ks.write_ds()
