@@ -47,8 +47,9 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import datetime
-import dns.rdata
 import dns.dnssec
+import dns.rdata
+import dns.resolver
 import dns.ttl
 import dns.zone
 import fnmatch
@@ -86,6 +87,15 @@ KEYSPECS = {
              'revoked': 0,      # For how long to keep the revoked key around
              },
     }
+
+KEYLIFETIME_DS_EXTEND =  4 # extend keys that are referenced in DS records but expire in less than that many days
+KEYLIFETIME_DS_CRIT   =  6 # warn about keys that are referenced in DS records but expire in less than that many days
+KEYLIFETIME_DS_WARN   = 10 # warn abou  keys that are referenced in DS records but expire in less than that many days
+
+def ds_dignum_to_name(n):
+    if n == 1: return 'SHA1'
+    elif n == 2: return 'SHA256'
+    else: raise Exception('unsupported digest number "%d"' % n)
 
 class DNSSecKeyParseError(Exception):
     pass
@@ -128,7 +138,7 @@ class DNSSecKey():
     def set_ttl(self, ttl):
         if ttl is None:
             ttl = "none"
-        subprocess.check_call([SETTIME, '-L', str(ttl), self.filename])
+        subprocess.check_output([SETTIME, '-L', str(ttl), self.filename], stderr=subprocess.STDOUT)
 
     def ds(self, digest=['SHA256']):
         return map(lambda h:dns.dnssec.make_ds(self.origin, self.key, h), digest)
@@ -163,6 +173,18 @@ class DNSSecKey():
         timestamps = filter(lambda k: k is not None, [ self.ts['Inactive'], self.ts['Delete'], self.ts['Revoke'] ])
 
         return min(timestamps)
+
+    def extend_life(self):
+        args = [SETTIME]
+        for k in [ ('-I', 'Inactive'), ('-D', 'Delete'), ('-R', 'Revoke')]:
+            ts = self.ts[k[1]]
+            if ts is None: continue
+            ts = ts + datetime.timedelta(1)
+            args += [ k[0], ts.strftime('%Y%m%d%H%M%S') ]
+        args += [ self.filename ]
+
+        subprocess.check_output(args, stderr=subprocess.STDOUT)
+
 
 class KeySet:
     def __init__(self, directory='.', prefer_single_keytpe = False, ttl = None):
@@ -347,6 +369,16 @@ class KeySet:
         while self._update_key_if_needed(ksk = True): pass
         while self._update_key_if_needed(ksk = False): pass
 
+    def __iter__(self):
+        for x in self.ksks + self.zsks:
+            yield x
+
+    def __getitem__(self, keytag):
+        for x in self:
+            if x.keytag() == keytag:
+                return x
+        raise KeyError("No key with tag %d"%(keytag,))
+
     def ds(self, digest=['SHA256']):
         lines = []
         if self.single_keytype_zone:
@@ -378,6 +410,40 @@ class KeySet:
             with open(fn,"w") as f:
                 f.write(dsset)
 
+    def check_ds(self):
+        warn = []
+        crit = []
+        now = datetime.datetime.now()
+
+        ans = dns.resolver.query(self.origin, 'DS')
+        for rdata in ans:
+            if rdata.rdtype != dns.rdatatype.DS: continue
+            keytag = rdata.key_tag
+
+            try:
+                dnskey = self[keytag]
+            except KeyError:
+                crit += ["No key for DS with keytag %d."%(keytag,)]
+                continue
+
+            ds = dnskey.ds(digest = [ds_dignum_to_name(rdata.digest_type)])[0]
+            if ds != rdata:
+                crit += ["mismatched DS for key %d."%(keytag,)]
+                continue
+
+            if now > dnskey.eol():
+                crit += ["Key %d expired."%(keytag,)]
+                continue
+
+            if now + datetime.timedelta(KEYLIFETIME_DS_EXTEND) > dnskey.eol():
+                crit += ["Key %d about to expire.  Moved a bit into the future."%(keytag,)]
+                dnskey.extend_life()
+            elif now + datetime.timedelta(KEYLIFETIME_DS_CRIT) > dnskey.eol():
+                crit += ["Key %d about to expire."%(keytag,)]
+            elif now + datetime.timedelta(KEYLIFETIME_DS_WARN) > dnskey.eol():
+                warn += ["Key %d about to expire."%(keytag,)]
+
+        return (crit, warn)
 
 if 'DNSHELPERS_CONF' in os.environ:
     conffile = os.environ['DNSHELPERS_CONF']
@@ -393,16 +459,48 @@ parser.add_option("--key-dir", dest="keydir", metavar='DIR', default=config['key
     help="Directory that holds the keys.")
 parser.add_option("--ttl", dest="ttl", metavar='TTL',
     help="TTL of DS records.")
+parser.add_option("--mode", dest="mode", metavar='MODE', default="keygen",
+    help="keygen: create keys; ds-check: ensure any keys referenced by DS records do not expire. (also warns in nagios check style)")
 (options, args) = parser.parse_args()
 
 if len(args) < 1:
     parser.print_help()
     sys.exit(1)
 
+status = { 'crit': {}, 'warn': {}, 'ok': {} }
+
 for d in args:
     p = os.path.join(options.keydir, d)
     if not os.path.exists(p):
         os.mkdir(p)
     ks = KeySet(p, prefer_single_keytpe=options.single_key_type, ttl=options.ttl)
-    ks.update_keys()
-    ks.write_ds()
+    if options.mode == "keygen":
+        ks.update_keys()
+        ks.write_ds()
+    elif options.mode == "ds-check":
+        (c,w) = ks.check_ds()
+        if len(c): status['crit'][d] = c + w
+        elif len(w): status['warn'][d] = w
+        else: status['ok'][d] = 1
+    else:
+        print >> sys.stderr, "Invalid mode."
+        sys.exit(1)
+
+
+if options.mode == "ds-check":
+    ec = None
+    if len(status['crit']) > 0:
+        print "CRITICAL:", ",".join(status['crit'].keys()), "; ",
+        ec = 2
+    if len(status['warn']) > 0:
+        print "WARN:", ",".join(status['warn'].keys()), "; ",
+        if ec is None: ec = 1
+    if len(status['ok']) > 0:
+        print "OK:", ",".join(status['ok'].keys()), "; ",
+        if ec is None: ec = 0
+    print
+    for s in ('crit', 'warn'):
+        for d in status[s]:
+            for l in status[s][d]:
+                print "%s: %s"%(d, l)
+    sys.exit(0)
