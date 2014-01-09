@@ -127,7 +127,7 @@ class DNSSecKey():
 
     def set_ttl(self, ttl):
         if ttl is None:
-            return
+            ttl = "none"
         subprocess.check_call([SETTIME, '-L', str(ttl), self.filename])
 
     def ds(self, digest=['SHA256']):
@@ -200,7 +200,10 @@ class KeySet:
     def _load_ttl(self):
         ttls = map(lambda x: x.ttl(), self.zsks + self.ksks)
         ttls = filter(lambda x: x is not None, ttls)
-        min_ttl = min(ttls)
+        if len(ttls) > 0:
+            min_ttl = min(ttls)
+        else:
+            min_ttl = None
         self.ttl = min_ttl
 
     def _rewrite_ttl(self):
@@ -352,7 +355,7 @@ class KeySet:
             keys = self.ksks
         keys.sort(key = lambda k: k.ts['Inactive'])
 
-        if self.ttl is not None:
+        if self.ttl is not None and self.ttl > 0:
             ttl=self.ttl
         else:
             ttl=''
