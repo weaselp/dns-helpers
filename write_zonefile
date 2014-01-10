@@ -228,10 +228,9 @@ unless ($params->{'force-update'}) {
 	if (defined $serial) {
 		my $tmpzonefilename = write_zonefile($zonename, $serial, \@lines, $params);
 
-		if (compare($tmpzonefilename, $targetfilename) == 0) {
-			unlink($tmpzonefilename);
-			exit 0;
-		}
+		my $no_change = compare($tmpzonefilename, $targetfilename) == 0;
+		unlink($tmpzonefilename);
+		exit 0 if $no_change;
 	}
 }
 
