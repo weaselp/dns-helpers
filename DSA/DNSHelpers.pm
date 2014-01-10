@@ -181,8 +181,7 @@ returns undef on errors, 1 if OK.
 sub check_zonefile {
 	my ($zonename, $zonefilename, %options) = @_;
 
-	my $integrity_check = 'full';
-	$integrity_check = 'none' if $options{'no-integrity-checks'};
+	my $integrity_check = $options{'integrity-checks'} ? $options{'integrity-checks'} : 'full';
 
 	system(qw{/usr/sbin/named-checkzone -q -k fail -n fail -S fail -m fail -M fail -i}, $integrity_check, $zonename, $zonefilename);
 	if ($CHILD_ERROR >> 8 != 0) {

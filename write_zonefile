@@ -69,12 +69,13 @@ Do not run zonecheck on zone prior to compiling it.  (Note that compile runs mos
 checks also, so this isn't too useful anymore.)  Can be set per-zone in the zonefile
 itself using B<; wzf: skip-zonecheck = 1> on a line by itself.
 
-=item B<--no-integrity-checks>
+=item B<--integrity-checks>=I<mode>
 
-Do not require integrity checks to pass (i.e. targets of MX records need not
-have A records etc.) - see B<named-checkzone>(8) for details.
+Modify mode of integrity checks (i.e. validation of targets of MX records
+etc.) - see B<named-checkzone>(8) for details.  Valid modes are B<full> (default),
+B<local> and B<none>.
 Can be set per-zone in the zonefile itself using
-B<; wzf: no-integrity-checks = 1> on a line by itself.
+B<; wzf: integrity-checks = >I<mode> on a line by itself.
 
 =head1 CONFIGURATION OPTIONS
 
@@ -213,7 +214,7 @@ while (<INFILE>) {
 	if (/^; wzf:\s*soa_(origin|hostmaster|refresh|retry|expire|negttl)\s*=\s*(\S*)\s*$/) { $SOA->{$1} = $2 }
 	elsif (/^; wzf:\s*default_ttl\s*=\s*(\S*)\s*$/) { $DEFAULT_TTL = $1 }
 	elsif (/^; wzf:\s*skip[-_]zonecheck\s*=\s*1\s*$/) { $params->{'skip-zonecheck'} = 1 }
-	elsif (/^; wzf:\s*no-integrity-checks\s*=\s*1\s*$/) { $params->{'no-integrity-checks'} = 1 }
+	elsif (/^; wzf:\s*integrity-checks\s*=\s*(full|local|none)\s*$/) { $params->{'integrity-checks'} = $1 }
 	elsif (/^; wzf:\s*dnssec\s*=\s*(\S*)\s*$/) { 1; } # nothing
 	elsif (/^; wzf:/) {
 		print STDERR "Unknown wzf directive in line $lineno: '$_'\n";
