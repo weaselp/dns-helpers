@@ -502,10 +502,10 @@ for d in args:
 if options.mode == "ds-check":
     ec = None
     if len(status['crit']) > 0:
-        print "CRITICAL:", ",".join(status['crit'].keys()), "; ",
+        print "CRITICAL:", ", ".join(status['crit'].keys()), "; ",
         ec = 2
     if len(status['warn']) > 0:
-        print "WARN:", ",".join(status['warn'].keys()), "; ",
+        print "WARN:", ", ".join(status['warn'].keys()), "; ",
         if ec is None: ec = 1
     if len(status['ok']) > 0:
         print "OK:", len(status['ok']),
