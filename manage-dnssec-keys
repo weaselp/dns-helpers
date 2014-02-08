@@ -92,6 +92,9 @@ KEYLIFETIME_DS_EXTEND =  4 # extend keys that are referenced in DS records but e
 KEYLIFETIME_DS_CRIT   =  6 # warn about keys that are referenced in DS records but expire in less than that many days
 KEYLIFETIME_DS_WARN   = 10 # warn abou  keys that are referenced in DS records but expire in less than that many days
 
+EXPIRED_KEY_DS_SKEW = 2 # if a key is referenced by DS, but is not the longest-living such key,
+                        # we will not complain if it's expired for 2 days (we might still see it due to dns ttls and stuff)
+
 def ds_dignum_to_name(n):
     if n == 1: return 'SHA1'
     elif n == 2: return 'SHA256'
@@ -424,6 +427,7 @@ class KeySet:
         except dns.resolver.NoAnswer:
             ans = []
 
+        linked_keys = []
         for rdata in ans:
             if rdata.rdtype != dns.rdatatype.DS: continue
             keytag = rdata.key_tag
@@ -442,10 +446,21 @@ class KeySet:
                 crit += ["mismatched DS (digest type %d) for key %d."%(rdata.digest_type, keytag,)]
                 continue
 
+            linked_keys.append(dnskey)
+
+        linked_keys.sort(key = lambda k: k.eol())
+
+        # all but the newest key
+        for dnskey in linked_keys[:-1]:
+            if now > dnskey.eol() + datetime.timedelta(EXPIRED_KEY_DS_SKEW):
+                warn += ["Key %d expired."%(keytag,)]
+                continue
+
+        # just the newest key, if it exists:
+        for dnskey in linked_keys[-1:]:
             if now > dnskey.eol():
                 crit += ["Key %d expired."%(keytag,)]
                 continue
-
             if now + datetime.timedelta(KEYLIFETIME_DS_EXTEND) > dnskey.eol():
                 crit += ["Key %d about to expire.  Moved a bit into the future."%(keytag,)]
                 dnskey.extend_life()
