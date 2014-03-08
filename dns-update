@@ -183,7 +183,6 @@ sub do_update {
 	closedir D;
 
 	my ($namedfd, $namedfile) = tempfile(DIR => $OUTDIR);
-	print $namedfd "include \"/etc/bind/named.conf.extra\";\n\n";
 
 	# same sort thing as above
 	for my $file (sort {length($b) <=> length($a)} @zones) {
