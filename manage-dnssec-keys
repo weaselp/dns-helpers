@@ -424,6 +424,8 @@ class KeySet:
         except dns.exception.Timeout:
             warn += ["Query for DS failed."]
             ans = []
+        except dns.resolver.NXDOMAIN:
+            ans = []
         except dns.resolver.NoAnswer:
             ans = []
 
