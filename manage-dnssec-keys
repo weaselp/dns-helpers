@@ -25,7 +25,7 @@
 # lifetime should be extended.
 
 
-# Copyright (c) 2013, 2014 Peter Palfrader <peter@palfrader.org>
+# Copyright (c) 2013, 2014, 2016 Peter Palfrader <peter@palfrader.org>
 #
 # Permission is hereby granted, free of charge, to any person obtaining
 # a copy of this software and associated documentation files (the
@@ -455,22 +455,22 @@ class KeySet:
         # all but the newest key
         for dnskey in linked_keys[:-1]:
             if now > dnskey.eol() + datetime.timedelta(EXPIRED_KEY_DS_SKEW):
-                warn += ["Key %d expired."%(keytag,)]
+                warn += ["Key %s expired %s."%(dnskey.keytag(), dnskey.eol())]
                 continue
 
         # just the newest key, if it exists:
         for dnskey in linked_keys[-1:]:
             if now > dnskey.eol():
-                crit += ["Key %d expired."%(keytag,)]
+                crit += ["Key %d expired."%(dnskey.keytag(),)]
                 continue
             if now + datetime.timedelta(KEYLIFETIME_DS_EXTEND) > dnskey.eol():
-                crit += ["Key %d about to expire.  Moved a bit into the future."%(keytag,)]
+                crit += ["Key %d about to expire.  Moved a bit into the future."%(dnskey.keytag(),)]
                 dnskey.extend_life()
                 self._fixperms()
             elif now + datetime.timedelta(KEYLIFETIME_DS_CRIT) > dnskey.eol():
-                crit += ["Key %d about to expire."%(keytag,)]
+                crit += ["Key %d about to expire."%(dnskey.keytag(),)]
             elif now + datetime.timedelta(KEYLIFETIME_DS_WARN) > dnskey.eol():
-                warn += ["Key %d about to expire."%(keytag,)]
+                warn += ["Key %d about to expire."%(dnskey.keytag(),)]
 
         return (crit, warn)
 
